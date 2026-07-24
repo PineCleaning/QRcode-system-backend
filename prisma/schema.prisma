@@ -17,8 +17,9 @@
 //     foreign key (id) references auth.users(id) on delete cascade;
 
 generator client {
-  provider = "prisma-client"
-  output   = "../generated/prisma"
+  provider     = "prisma-client"
+  output       = "../generated/prisma"
+  moduleFormat = "cjs"
 }
 
 datasource db {

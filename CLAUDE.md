@@ -10,11 +10,21 @@ This is the **backend repo** for the QR Feedback System. It is its own git repos
 
 ## Tech Stack
 - **Framework:** NestJS + TypeScript
-- **ORM:** Prisma
+- **ORM:** Prisma 7 (rust-free — WASM query engine + `@prisma/adapter-pg` driver adapter, `moduleFormat = "cjs"` in the generator block to match this project's CommonJS build)
 - **Database & Auth:** Supabase PostgreSQL (via Prisma) + Supabase Auth
 - **Media storage:** Cloudinary
 - **CRM:** ClickUp OAuth + direct API integration only
 - **Deployment:** Railway
+
+## ⚠️ Known environment issue: Prisma CLI blocked on this machine
+This machine's **Windows Smart App Control** policy blocks Prisma's native `schema-engine-windows.exe` from running — confirmed via Windows Event Viewer (`Microsoft-Windows-CodeIntegrity/Operational`, Code Integrity policy violation). This means **`prisma migrate dev`, `prisma migrate deploy`, `prisma db push`, and `prisma db pull` do not work on this machine.** `prisma generate` and `prisma validate` are unaffected (they don't need the schema-engine binary), and neither is Prisma Client at runtime (Prisma 7's query engine is WASM/TS, not a native binary).
+
+**Until this is resolved** (disabling Smart App Control, or moving dev to WSL/another machine), apply schema changes this way:
+1. Hand-write the DDL in a new `prisma/migrations/<timestamp>_<name>/migration.sql` file (matching what `prisma migrate dev` would have generated from the `schema.prisma` diff).
+2. Run `node scripts/apply-baseline-migration.js <timestamp>_<name>` — this applies the SQL via `pg` (pure JS, unaffected by Smart App Control) and records the migration in `_prisma_migrations` with the correct SHA-256 checksum, so a real `prisma migrate deploy` later (e.g. on Railway, which is Linux) sees it as already applied and doesn't try to re-run it.
+3. Update `prisma/schema.prisma` to match, then `prisma generate`.
+
+This workaround was used for the initial `20260724142555_init_schema_v1_5` migration. If Smart App Control gets resolved on this machine, switch back to normal `prisma migrate dev` for all subsequent schema changes.
 
 ## Responsibilities
 - Admin auth (JWT verification against Supabase Auth, via a NestJS guard)
