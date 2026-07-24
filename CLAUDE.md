@@ -26,8 +26,16 @@ This machine's **Windows Smart App Control** policy blocks Prisma's native `sche
 
 This workaround was used for the initial `20260724142555_init_schema_v1_5` migration. If Smart App Control gets resolved on this machine, switch back to normal `prisma migrate dev` for all subsequent schema changes.
 
+## Auth (Day 1 Hr 5 — implemented 2026-07-24)
+- `PrismaModule`/`PrismaService` (`src/prisma/`) — global module wrapping `PrismaClient` with the `@prisma/adapter-pg` driver adapter.
+- `SupabaseModule`/`SupabaseService` (`src/supabase/`) — global module wrapping a `supabase-js` client built from `SUPABASE_URL` + `SUPABASE_SERVICE_KEY` (service role — server-only).
+- `SupabaseAuthGuard` (`src/auth/supabase-auth.guard.ts`) — verifies the `Authorization: Bearer <token>` header by calling `supabase.auth.getUser(token)` (network call to Supabase Auth, not local JWT verification — chosen for simplicity over local JWKS/secret verification at this app's scale). On success, looks up the corresponding `admin_users` row by id and requires `status = 'ACTIVE'`; a valid Supabase session alone is **not** sufficient — the user must also exist in `admin_users`. Throws `UnauthorizedException` otherwise.
+- `@CurrentAdmin()` param decorator (`src/auth/current-admin.decorator.ts`) pulls the resolved `AdminUser` off the request inside a guarded route.
+- `GET /auth/me` (`src/auth/auth.controller.ts`) — reference protected endpoint, returns the current admin. Apply `@UseGuards(SupabaseAuthGuard)` to any route that needs admin auth.
+- Verified end-to-end 2026-07-24: rejects missing/invalid tokens (401), accepts a real Supabase Auth session for a user with a matching active `admin_users` row (200).
+
 ## Responsibilities
-- Admin auth (JWT verification against Supabase Auth, via a NestJS guard)
+- Admin auth (JWT verification against Supabase Auth, via a NestJS guard) — done, see above
 - Clients CRUD (`/clients`) — every mutation syncs to ClickUp, stores `clickup_entity_id`
 - Sites CRUD (`/sites`) — slug generation/enforcement, ClickUp sync, stores `clickup_entity_id`
 - QR code generation + download (PNG/JPG/PDF, A4/A5 sized)
