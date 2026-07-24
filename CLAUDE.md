@@ -1,12 +1,12 @@
 # Backend — QR Feedback System (NestJS)
 
-This is the **backend repo** for the QR Feedback System. It is its own git repository, separate from the frontend repo (`../frontend`). See `../CLAUDE.md` (root) for the full business context, requirements, and day-by-day project plan.
+This is the **backend repo** for the QR Feedback System. It is its own git repository, separate from the frontend repo (`../QRcode-system-frontend`). See `../../CLAUDE.md` (root) for the full business context, requirements, and day-by-day project plan.
 
 **Tech stack locked 2026-07-23** — this replaces an earlier FastAPI/Python draft. Do not scaffold or suggest Python/FastAPI code here.
 
 **Scope change (2026-07-23): no n8n.** ClickUp delivery is a single direct API call — there is no parallel webhook path. Do not build any n8n integration or `N8N_WEBHOOK_URL` handling.
 
-**DB schema locked at v1.5 (2026-07-24)** — see `../CLAUDE.md` Section 7 for the full ERD/enums. Key additions vs. the original design: `clickup_connections` (encrypted OAuth token storage), `integration_jobs` (delivery retry engine, replaces a single status column), `idempotency_key` on feedback. `csv_upload_*` tables are renamed `csv_import_*`. The `feedback_submissions` text field is `feedback` (user override — the source SQL file names it `message`, do not use that name). **`client_site_status` is 2-state (`ACTIVE`/`INACTIVE`)** — a proposed `ARCHIVED` third state was dropped 2026-07-24, don't add it back.
+**DB schema locked at v1.5 (2026-07-24)** — see `../../CLAUDE.md` Section 7 for the full ERD/enums. Key additions vs. the original design: `clickup_connections` (encrypted OAuth token storage), `integration_jobs` (delivery retry engine, replaces a single status column), `idempotency_key` on feedback. `csv_upload_*` tables are renamed `csv_import_*`. The `feedback_submissions` text field is `feedback` (user override — the source SQL file names it `message`, do not use that name). **`client_site_status` is 2-state (`ACTIVE`/`INACTIVE`)** — a proposed `ARCHIVED` third state was dropped 2026-07-24, don't add it back.
 
 ## Tech Stack
 - **Framework:** NestJS + TypeScript
@@ -56,10 +56,10 @@ See `.env.example`. Never commit `.env` or paste real secrets into a prompt. Req
 - Full DB schema: see root-level reference doc or the current `schema.prisma` — do not assume table shape without checking.
 
 ## Database
-Full v1.5 schema (tables: `admin_users`, `clickup_connections`, `clients`, `sites`, `feedback_submissions`, `feedback_media`, `csv_import_batches`, `csv_import_rows`, `integration_jobs`) is documented in the root project plan (`../CLAUDE.md`, Section 7), sourced from `pine-cleaning-schema-v1_5.sql` in Downloads (with the `message`→`feedback` override). Already modeled in `prisma/schema.prisma` as of 2026-07-24 — that file is the live source of truth for column names/types over the root doc.
+Full v1.5 schema (tables: `admin_users`, `clickup_connections`, `clients`, `sites`, `feedback_submissions`, `feedback_media`, `csv_import_batches`, `csv_import_rows`, `integration_jobs`) is documented in the root project plan (`../../CLAUDE.md`, Section 7), sourced from `pine-cleaning-schema-v1_5.sql` in Downloads (with the `message`→`feedback` override). Already modeled in `prisma/schema.prisma` as of 2026-07-24 — that file is the live source of truth for column names/types over the root doc.
 
 ## Open Decisions Affecting This Repo
-Before building the related endpoint, confirm these with the user (full list in `../CLAUDE.md`):
+Before building the related endpoint, confirm these with the user (full list in `../../CLAUDE.md`):
 1. ~~Duplicate ticket risk~~ — moot, n8n dropped 2026-07-23.
 2. Hard delete behavior on sites with feedback history (currently `ON DELETE RESTRICT`).
 3. ClickUp structure mapping — client = List, Folder, or Task w/ custom fields?
