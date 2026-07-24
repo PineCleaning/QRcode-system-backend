@@ -117,12 +117,27 @@ model AdminUser {
 }
 
 /// One row per authorised ClickUp Workspace connection (OAuth).
+///
+/// ticketsListId/companiesListId/clientFieldId/siteFieldId are
+/// one-time-per-workspace config (Open Decision #3, resolved
+/// 2026-07-24): feedback becomes Tasks in one shared TICKETS list;
+/// clients map to existing records in a COMPANIES list; tickets link
+/// to their company via a ClickUp Relationship custom field that
+/// already exists in the workspace (field name "CLIENT NAME") — its
+/// field_id is fetched once via GET /list/{list_id}/field and stored
+/// here, never created programmatically. siteFieldId stays unused/
+/// null for now — no structured Sites list exists in ClickUp today;
+/// site is represented as plain text on the ticket instead.
 model ClickupConnection {
   id                   String                  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   workspaceId          String                  @unique @map("workspace_id")
   workspaceName        String?                 @map("workspace_name")
   encryptedAccessToken String                  @map("encrypted_access_token")
   status               ClickupConnectionStatus @default(CONNECTED)
+  ticketsListId        String?                 @map("tickets_list_id")
+  companiesListId      String?                 @map("companies_list_id")
+  clientFieldId        String?                 @map("client_field_id")
+  siteFieldId          String?                 @map("site_field_id")
   connectedBy          String?                 @map("connected_by") @db.Uuid
   connectedByUser      AdminUser?              @relation(fields: [connectedBy], references: [id])
   connectedAt          DateTime                @default(now()) @map("connected_at")

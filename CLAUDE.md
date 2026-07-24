@@ -34,14 +34,26 @@ This workaround was used for the initial `20260724142555_init_schema_v1_5` migra
 - `GET /auth/me` (`src/auth/auth.controller.ts`) — reference protected endpoint, returns the current admin. Apply `@UseGuards(SupabaseAuthGuard)` to any route that needs admin auth.
 - Verified end-to-end 2026-07-24: rejects missing/invalid tokens (401), accepts a real Supabase Auth session for a user with a matching active `admin_users` row (200).
 
+## ClickUp Structure Mapping (Open Decision #3 — resolved 2026-07-24)
+
+Confirmed against the client's real ClickUp workspace. Full detail also in `../../CLAUDE.md` Section 7.
+
+- Feedback → **Task in one shared `TICKETS` List**. No per-client List/Folder.
+- Client → **existing record in a `COMPANIES` List** (under a `CUSTOMERS` space). The portal creates/updates Company task records, never the List/Space itself.
+- Ticket-to-Company link: a **pre-existing Relationship custom field** (`CLIENT NAME`) on the `TICKETS` list. ClickUp's API can't create custom fields — fetch its `field_id` once via `GET /list/{list_id}/field` and cache it in `clickup_connections.client_field_id`.
+- **Site has no ClickUp structure yet** — no Sites list exists. Represent it as plain text on the ticket (e.g. task title/description: "Client Name — Site Name"). `sites.clickup_entity_id` and `clickup_connections.site_field_id` stay unused/null — reserved for later, don't populate them now.
+- Config (`tickets_list_id`, `companies_list_id`, `client_field_id`, `site_field_id`) lives on `clickup_connections` — one-time per-workspace, not per-row.
+- **Company record writes are partial-write only** — the portal writes just its own fields (name, contact email, contact phone, status-equivalent) when creating/updating a Company task. Never touch other fields on that record (Facility Type, Cleaning Frequency, Date Quote Accepted, Upcoming Tasks, etc.) — those belong to the client's own team and must survive a portal sync untouched.
+- **Never create ClickUp Lists, Folders, Spaces, or custom fields programmatically** — the integration is read/write against structure that already exists, full stop.
+
 ## Responsibilities
 - Admin auth (JWT verification against Supabase Auth, via a NestJS guard) — done, see above
-- Clients CRUD (`/clients`) — every mutation syncs to ClickUp, stores `clickup_entity_id`
-- Sites CRUD (`/sites`) — slug generation/enforcement, ClickUp sync, stores `clickup_entity_id`
+- Clients CRUD (`/clients`) — every mutation syncs to the matching ClickUp Company record (partial-write, see above), stores `clickup_entity_id`
+- Sites CRUD (`/sites`) — slug generation/enforcement; no ClickUp sync for sites yet (no structured counterpart)
 - QR code generation + download (PNG/JPG/PDF, A4/A5 sized)
 - CSV bulk upload (`/clients/bulk-upload`) — per-row success/error reporting via `csv_import_batches`/`csv_import_rows`
 - Public slug resolution (`/public/{slug}`)
-- Feedback submission (`/feedback/{slug}`) — accepts a frontend-generated `idempotency_key` (plain UUID v4, no server-side derivation), direct ClickUp API delivery tracked via an `integration_jobs` row (not a simple status column)
+- Feedback submission (`/feedback/{slug}`) — accepts a frontend-generated `idempotency_key` (plain UUID v4, no server-side derivation), delivered as a Task in `TICKETS` (Relationship field set to the client's `clickup_entity_id`, site as plain text), tracked via an `integration_jobs` row (not a simple status column)
 - Media upload handling via Cloudinary — `feedback_media` stores `cloudinary_public_id` + `resource_type`, not a URL
 - ClickUp OAuth flow (authorize, token exchange) — resulting connection stored encrypted in `clickup_connections`, not just env-config
 - Retry/backoff worker for `integration_jobs` in `PENDING`/`RETRYING` status
@@ -61,16 +73,18 @@ See `.env.example`. Never commit `.env` or paste real secrets into a prompt. Req
 - **`idempotency_key` is frontend-generated (plain UUID v4), backend just enforces it** — reject/dedupe on the unique constraint; don't hash or derive it server-side.
 - **Soft delete via 2-state status** — `clients` and `sites` use `ACTIVE`/`INACTIVE` only (uppercase enum, not free-text). Do not reintroduce `ARCHIVED` — dropped 2026-07-24. Hard delete is only via explicit API action, and `feedback_submissions.site_id` is `ON DELETE RESTRICT` (see Open Decision #2 in root doc — confirm before changing).
 - **ClickUp rate limits** — add retry/backoff on ClickUp calls, especially during bulk uploads. Never let a failed sync fail silently.
+- **Never create ClickUp Lists, Folders, Spaces, or custom fields via the API.** All required structure (`TICKETS` list, `COMPANIES` list, `CLIENT NAME` relationship field) already exists in the client's workspace — fetch and cache IDs, don't create.
+- **Company record syncs are partial writes only** — never overwrite fields on a Company task that the portal doesn't own (see ClickUp Structure Mapping above).
 - Full DB schema: see root-level reference doc or the current `schema.prisma` — do not assume table shape without checking.
 
 ## Database
-Full v1.5 schema (tables: `admin_users`, `clickup_connections`, `clients`, `sites`, `feedback_submissions`, `feedback_media`, `csv_import_batches`, `csv_import_rows`, `integration_jobs`) is documented in the root project plan (`../../CLAUDE.md`, Section 7), sourced from `pine-cleaning-schema-v1_5.sql` in Downloads (with the `message`→`feedback` override). Already modeled in `prisma/schema.prisma` as of 2026-07-24 — that file is the live source of truth for column names/types over the root doc.
+Full v1.5 schema (tables: `admin_users`, `clickup_connections`, `clients`, `sites`, `feedback_submissions`, `feedback_media`, `csv_import_batches`, `csv_import_rows`, `integration_jobs`) is documented in the root project plan (`../../CLAUDE.md`, Section 7), sourced from `pine-cleaning-schema-v1_5.sql` in Downloads (with the `message`→`feedback` override). Modeled in `prisma/schema.prisma` — that file is the live source of truth for column names/types over the root doc. `clickup_connections` gained `tickets_list_id`, `companies_list_id`, `client_field_id`, `site_field_id` on 2026-07-24 (migration `20260724163207_clickup_connection_config_fields`) per the ClickUp Structure Mapping resolution above.
 
 ## Open Decisions Affecting This Repo
 Before building the related endpoint, confirm these with the user (full list in `../../CLAUDE.md`):
 1. ~~Duplicate ticket risk~~ — moot, n8n dropped 2026-07-23.
 2. Hard delete behavior on sites with feedback history (currently `ON DELETE RESTRICT`).
-3. ClickUp structure mapping — client = List, Folder, or Task w/ custom fields?
+3. ~~ClickUp structure mapping~~ — resolved 2026-07-24, see "ClickUp Structure Mapping" section above.
 4. CSV template column names/order.
 5. ~~Cloudflare product choice~~ — resolved: Cloudinary. Confirm upload preset/transformation settings.
 6. Upload flow — client → Cloudinary direct (signed upload) vs. client → backend → Cloudinary. `feedback_media.status` (`PENDING`/`VERIFIED`/`REJECTED`) implies signed-direct-upload-then-verify.
