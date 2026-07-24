@@ -1,7 +1,14 @@
-// This is your Prisma schema file,
-// learn more about it in the docs: https://pris.ly/d/prisma-schema
-
-// Get a free hosted Postgres database in seconds: `npx create-db`
+// Pine Cleaning QR Feedback System — Prisma schema (v1.5)
+// Source: pine-cleaning-schema-v1_5.sql, with one deviation:
+// feedback_submissions' text field is named `feedback`, not `message`
+// (user override, confirmed 2026-07-24).
+//
+// admin_users.id references Supabase Auth's auth.users(id). Prisma
+// can't model that cross-schema FK directly — add it manually via a
+// migration SQL edit after `prisma migrate dev --create-only`:
+//   alter table admin_users
+//     add constraint admin_users_id_fkey
+//     foreign key (id) references auth.users(id) on delete cascade;
 
 generator client {
   provider = "prisma-client"
@@ -10,4 +17,259 @@ generator client {
 
 datasource db {
   provider = "postgresql"
+}
+
+enum AdminStatus {
+  ACTIVE
+  INACTIVE
+
+  @@map("admin_status")
+}
+
+enum ClickupConnectionStatus {
+  CONNECTED
+  DISCONNECTED
+  RECONNECT_REQUIRED
+
+  @@map("clickup_connection_status")
+}
+
+enum ClientSiteStatus {
+  ACTIVE
+  INACTIVE
+  ARCHIVED
+
+  @@map("client_site_status")
+}
+
+enum FeedbackStatus {
+  DRAFT
+  SUBMITTED
+  DELIVERY_PENDING
+  DELIVERED
+  DELIVERY_FAILED
+
+  @@map("feedback_status")
+}
+
+enum MediaResourceType {
+  IMAGE
+  VIDEO
+
+  @@map("media_resource_type")
+}
+
+enum MediaStatus {
+  PENDING
+  VERIFIED
+  REJECTED
+
+  @@map("media_status")
+}
+
+enum CsvBatchStatus {
+  PROCESSING
+  COMPLETED
+  FAILED
+
+  @@map("csv_batch_status")
+}
+
+enum CsvRowStatus {
+  SUCCESS
+  ERROR
+
+  @@map("csv_row_status")
+}
+
+enum IntegrationJobStatus {
+  PENDING
+  PROCESSING
+  RETRYING
+  SUCCEEDED
+  FAILED
+
+  @@map("integration_job_status")
+}
+
+/// Profile table only — NOT auth. id references Supabase Auth's own
+/// auth.users table; sign-in/passwords are fully owned by Supabase
+/// Auth and never stored here.
+model AdminUser {
+  id        String      @id @db.Uuid
+  email     String      @unique
+  fullName  String?     @map("full_name")
+  role      String      @default("admin")
+  status    AdminStatus @default(ACTIVE)
+  createdAt DateTime    @default(now()) @map("created_at")
+
+  clientsCreated     Client[]            @relation("ClientCreatedBy")
+  clickupConnections ClickupConnection[]
+  csvImportBatches   CsvImportBatch[]
+
+  @@map("admin_users")
+}
+
+/// One row per authorised ClickUp Workspace connection (OAuth).
+model ClickupConnection {
+  id                   String                  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  workspaceId          String                  @unique @map("workspace_id")
+  workspaceName        String?                 @map("workspace_name")
+  encryptedAccessToken String                  @map("encrypted_access_token")
+  status               ClickupConnectionStatus @default(CONNECTED)
+  connectedBy          String?                 @map("connected_by") @db.Uuid
+  connectedByUser      AdminUser?              @relation(fields: [connectedBy], references: [id])
+  connectedAt          DateTime                @default(now()) @map("connected_at")
+
+  @@index([status])
+  @@map("clickup_connections")
+}
+
+/// One row per client company of the cleaning business.
+model Client {
+  id              String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  clientCode      String           @unique @map("client_code")
+  name            String
+  contactEmail    String?          @map("contact_email")
+  contactPhone    String?          @map("contact_phone")
+  status          ClientSiteStatus @default(ACTIVE)
+  clickupEntityId String?          @map("clickup_entity_id")
+  createdBy       String?          @map("created_by") @db.Uuid
+  createdByUser   AdminUser?       @relation("ClientCreatedBy", fields: [createdBy], references: [id])
+  createdAt       DateTime         @default(now()) @map("created_at")
+  updatedAt       DateTime         @updatedAt @map("updated_at")
+
+  sites         Site[]
+  csvImportRows CsvImportRow[]
+
+  @@index([status])
+  @@index([name])
+  @@map("clients")
+}
+
+/// One row per physical location. Owns the permanent QR slug. Every
+/// client should have at least one site (enforced at the application
+/// layer, not as a DB constraint).
+model Site {
+  id              String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  clientId        String           @map("client_id") @db.Uuid
+  client          Client           @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  siteCode        String           @map("site_code")
+  slug            String           @unique
+  siteName        String           @map("site_name")
+  address         String?
+  status          ClientSiteStatus @default(ACTIVE)
+  clickupEntityId String?          @map("clickup_entity_id")
+  createdAt       DateTime         @default(now()) @map("created_at")
+  updatedAt       DateTime         @updatedAt @map("updated_at")
+
+  feedbackSubmissions FeedbackSubmission[]
+  csvImportRows       CsvImportRow[]
+
+  @@unique([clientId, siteCode], map: "uq_client_site_code")
+  @@index([status])
+  @@index([slug])
+  @@map("sites")
+}
+
+/// One row per customer feedback scan+submit. idempotencyKey
+/// guarantees a submission can never accidentally create more than
+/// one ClickUp task.
+model FeedbackSubmission {
+  id             String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  siteId         String         @map("site_id") @db.Uuid
+  site           Site           @relation(fields: [siteId], references: [id], onDelete: Restrict)
+  idempotencyKey String         @unique @map("idempotency_key")
+  /// Named `feedback`, not `message` — user override of the v1.5 SQL source (2026-07-24).
+  feedback       String
+  mobileNumber   String?        @map("mobile_number")
+  status         FeedbackStatus @default(SUBMITTED)
+  clickupTaskId  String?        @map("clickup_task_id")
+  submittedAt    DateTime       @default(now()) @map("submitted_at")
+  deliveredAt    DateTime?      @map("delivered_at")
+
+  media           FeedbackMedia[]
+  integrationJobs IntegrationJob[]
+
+  @@index([siteId])
+  @@index([submittedAt])
+  @@index([status])
+  @@map("feedback_submissions")
+}
+
+/// Photos/videos attached to a feedback submission. No stored URL —
+/// derive it from cloudinaryPublicId + resourceType at read time.
+model FeedbackMedia {
+  id                 String              @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  feedbackId         String              @map("feedback_id") @db.Uuid
+  feedback           FeedbackSubmission  @relation(fields: [feedbackId], references: [id], onDelete: Cascade)
+  cloudinaryPublicId String              @unique @map("cloudinary_public_id")
+  resourceType       MediaResourceType   @map("resource_type")
+  originalFilename   String?             @map("original_filename")
+  mimeType           String              @map("mime_type")
+  sizeBytes          Int                 @map("size_bytes")
+  status             MediaStatus         @default(PENDING)
+  createdAt          DateTime            @default(now()) @map("created_at")
+
+  @@index([feedbackId])
+  @@map("feedback_media")
+}
+
+/// One row per bulk CSV upload event.
+model CsvImportBatch {
+  id             String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  uploadedBy     String?        @map("uploaded_by") @db.Uuid
+  uploadedByUser AdminUser?     @relation(fields: [uploadedBy], references: [id])
+  filename       String
+  status         CsvBatchStatus @default(PROCESSING)
+  totalRows      Int            @default(0) @map("total_rows")
+  successCount   Int            @default(0) @map("success_count")
+  errorCount     Int            @default(0) @map("error_count")
+  createdAt      DateTime       @default(now()) @map("created_at")
+
+  rows CsvImportRow[]
+
+  @@index([createdAt])
+  @@index([status])
+  @@map("csv_import_batches")
+}
+
+/// One row per line in a CSV upload, with per-row result. client_id
+/// and site_id are nullable: a failed row never created one.
+model CsvImportRow {
+  id           String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  batchId      String         @map("batch_id") @db.Uuid
+  batch        CsvImportBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  rowNumber    Int            @map("row_number")
+  clientId     String?        @map("client_id") @db.Uuid
+  client       Client?        @relation(fields: [clientId], references: [id], onDelete: SetNull)
+  siteId       String?        @map("site_id") @db.Uuid
+  site         Site?          @relation(fields: [siteId], references: [id], onDelete: SetNull)
+  status       CsvRowStatus
+  errorMessage String?        @map("error_message")
+  createdAt    DateTime       @default(now()) @map("created_at")
+
+  @@unique([batchId, rowNumber], map: "uq_batch_row_number")
+  @@index([batchId])
+  @@map("csv_import_rows")
+}
+
+/// The ClickUp delivery/retry engine for a feedback submission.
+model IntegrationJob {
+  id            String               @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  feedbackId    String               @map("feedback_id") @db.Uuid
+  feedback      FeedbackSubmission   @relation(fields: [feedbackId], references: [id], onDelete: Cascade)
+  jobType       String               @default("clickup_task_creation") @map("job_type")
+  status        IntegrationJobStatus @default(PENDING)
+  attemptCount  Int                  @default(0) @map("attempt_count")
+  nextAttemptAt DateTime?            @map("next_attempt_at")
+  externalId    String?              @map("external_id")
+  lastError     String?              @map("last_error")
+  createdAt     DateTime             @default(now()) @map("created_at")
+  updatedAt     DateTime             @updatedAt @map("updated_at")
+
+  @@unique([feedbackId, jobType], map: "uq_feedback_job_type")
+  @@index([status])
+  @@index([nextAttemptAt])
+  @@map("integration_jobs")
 }

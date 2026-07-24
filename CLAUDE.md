@@ -6,6 +6,8 @@ This is the **backend repo** for the QR Feedback System. It is its own git repos
 
 **Scope change (2026-07-23): no n8n.** ClickUp delivery is a single direct API call — there is no parallel webhook path. Do not build any n8n integration or `N8N_WEBHOOK_URL` handling.
 
+**DB schema locked at v1.5 (2026-07-24)** — see `../CLAUDE.md` Section 7 for the full ERD/enums. Key additions vs. the original design: `clickup_connections` (encrypted OAuth token storage), `integration_jobs` (delivery retry engine, replaces a single status column), `idempotency_key` on feedback, `ARCHIVED` as a third client/site status. `csv_upload_*` tables are renamed `csv_import_*`. The `feedback_submissions` text field is `feedback` (user override — the source SQL file names it `message`, do not use that name).
+
 ## Tech Stack
 - **Framework:** NestJS + TypeScript
 - **ORM:** Prisma
@@ -16,32 +18,34 @@ This is the **backend repo** for the QR Feedback System. It is its own git repos
 
 ## Responsibilities
 - Admin auth (JWT verification against Supabase Auth, via a NestJS guard)
-- Clients CRUD (`/clients`) — every mutation syncs to ClickUp
-- Sites CRUD (`/sites`) — slug generation/enforcement, ClickUp sync
+- Clients CRUD (`/clients`) — every mutation syncs to ClickUp, stores `clickup_entity_id`
+- Sites CRUD (`/sites`) — slug generation/enforcement, ClickUp sync, stores `clickup_entity_id`
 - QR code generation + download (PNG/JPG/PDF, A4/A5 sized)
-- CSV bulk upload (`/clients/bulk-upload`) — per-row success/error reporting
+- CSV bulk upload (`/clients/bulk-upload`) — per-row success/error reporting via `csv_import_batches`/`csv_import_rows`
 - Public slug resolution (`/public/{slug}`)
-- Feedback submission (`/feedback/{slug}`) — direct ClickUp API delivery, logged via `clickup_delivery_status`
-- Media upload handling via Cloudinary
-- ClickUp OAuth flow (authorize, token exchange, token refresh)
+- Feedback submission (`/feedback/{slug}`) — accepts/validates `idempotency_key`, direct ClickUp API delivery tracked via an `integration_jobs` row (not a simple status column)
+- Media upload handling via Cloudinary — `feedback_media` stores `cloudinary_public_id` + `resource_type`, not a URL
+- ClickUp OAuth flow (authorize, token exchange) — resulting connection stored encrypted in `clickup_connections`, not just env-config
+- Retry/backoff worker for `integration_jobs` in `PENDING`/`RETRYING` status
 
 ## Environment Variables
 See `.env.example`. Never commit `.env` or paste real secrets into a prompt. Required:
-`DATABASE_URL`, `SUPABASE_URL`, `SUPABASE_SERVICE_KEY`, `SUPABASE_ANON_KEY`, `CLICKUP_CLIENT_ID`, `CLICKUP_CLIENT_SECRET`, `CLICKUP_REDIRECT_URI`, `CLICKUP_WORKSPACE_ID`, `CLICKUP_LIST_ID`, `CLOUDINARY_CLOUD_NAME`, `CLOUDINARY_API_KEY`, `CLOUDINARY_API_SECRET`, `BASE_DOMAIN`.
+`DATABASE_URL`, `SUPABASE_URL`, `SUPABASE_SERVICE_KEY`, `SUPABASE_ANON_KEY`, `CLICKUP_CLIENT_ID`, `CLICKUP_CLIENT_SECRET`, `CLICKUP_REDIRECT_URI`, `CLICKUP_TOKEN_ENCRYPTION_KEY` (encrypts `clickup_connections.encrypted_access_token`), `CLICKUP_WORKSPACE_ID`, `CLICKUP_LIST_ID`, `CLOUDINARY_CLOUD_NAME`, `CLOUDINARY_API_KEY`, `CLOUDINARY_API_SECRET`, `BASE_DOMAIN`.
 
 ## Critical Rules
 - **Service role key stays backend-only.** Never expose it to the frontend.
-- **ClickUp uses OAuth, not a static personal token** — store and refresh access/refresh tokens server-side; never let an expired token silently fail a sync.
+- **ClickUp uses OAuth**, authorized once through the portal — the resulting access token is stored encrypted in `clickup_connections`, not a static env var. Never log or return the decrypted token.
 - **Prisma is the source of truth for schema changes** — model changes go through `schema.prisma` + `prisma migrate`, not manual edits in the Supabase dashboard.
 - **Slug uniqueness is enforced at the DB level** (Prisma `@unique`), not just app-level — bulk CSV upload is the likeliest place for a race condition.
-- **CSV bulk upload processes rows individually** — one bad row must not fail the whole batch. Log every batch + row to `csv_upload_batches` / `csv_upload_rows`.
-- **No n8n, single delivery path** — the direct ClickUp API call is the only way a feedback ticket is created. Add retry/backoff on that call and log outcome via `clickup_delivery_status`; there is no fallback path if it fails.
-- **Soft delete by default** — `clients` and `sites` use a `status` column (`active`/`inactive`). Hard delete is only via explicit API action, and `feedback_submissions.site_id` is `ON DELETE RESTRICT` (see Open Decision #2 in root doc — confirm before changing).
+- **CSV bulk upload processes rows individually** — one bad row must not fail the whole batch. Log every batch + row to `csv_import_batches` / `csv_import_rows`.
+- **No n8n, single delivery path** — the direct ClickUp API call is the only way a feedback ticket is created. Every feedback submission gets an `integration_jobs` row driving retry/backoff (`attempt_count`, `next_attempt_at`, `last_error`); there is no fallback path if delivery fails.
+- **Feedback submissions require a unique `idempotency_key`** — reject/dedupe on conflict so a client-side retry can never create two tickets for one submission.
+- **Soft delete via 3-state status** — `clients` and `sites` use `ACTIVE`/`INACTIVE`/`ARCHIVED` (uppercase enum, not free-text). Hard delete is only via explicit API action, and `feedback_submissions.site_id` is `ON DELETE RESTRICT` (see Open Decision #2 in root doc — confirm before changing). Behavioral difference between `INACTIVE` and `ARCHIVED` is still open — see Open Decision #8.
 - **ClickUp rate limits** — add retry/backoff on ClickUp calls, especially during bulk uploads. Never let a failed sync fail silently.
 - Full DB schema: see root-level reference doc or the current `schema.prisma` — do not assume table shape without checking.
 
 ## Database
-Full schema (tables: `admin_users`, `clients`, `sites`, `feedback_submissions`, `feedback_media`, `csv_upload_batches`, `csv_upload_rows`) is documented in the root project plan (`../CLAUDE.md`, Section 7). Model it in `prisma/schema.prisma` when Day 1 Hr 4 begins — that file becomes the live source of truth for column names/types once created, ahead of the root doc.
+Full v1.5 schema (tables: `admin_users`, `clickup_connections`, `clients`, `sites`, `feedback_submissions`, `feedback_media`, `csv_import_batches`, `csv_import_rows`, `integration_jobs`) is documented in the root project plan (`../CLAUDE.md`, Section 7), sourced from `pine-cleaning-schema-v1_5.sql` in Downloads (with the `message`→`feedback` override). Already modeled in `prisma/schema.prisma` as of 2026-07-24 — that file is the live source of truth for column names/types over the root doc.
 
 ## Open Decisions Affecting This Repo
 Before building the related endpoint, confirm these with the user (full list in `../CLAUDE.md`):
@@ -50,8 +54,11 @@ Before building the related endpoint, confirm these with the user (full list in 
 3. ClickUp structure mapping — client = List, Folder, or Task w/ custom fields?
 4. CSV template column names/order.
 5. ~~Cloudflare product choice~~ — resolved: Cloudinary. Confirm upload preset/transformation settings.
-6. Upload flow — client → Cloudinary direct (signed upload) vs. client → backend → Cloudinary.
+6. Upload flow — client → Cloudinary direct (signed upload) vs. client → backend → Cloudinary. `feedback_media.status` (`PENDING`/`VERIFIED`/`REJECTED`) implies signed-direct-upload-then-verify.
 7. Domain/slug routing (affects `BASE_DOMAIN` and QR generation — must be locked before QR codes are printed).
+8. `INACTIVE` vs. `ARCHIVED` semantics for clients/sites — do both block ticket creation on `/public/{slug}`, or just one?
+9. `idempotency_key` generation — frontend-generated (client-side UUID at form load) or backend-derived?
+10. ClickUp token encryption strategy — app-level key (`CLICKUP_TOKEN_ENCRYPTION_KEY`) vs. Postgres `pgcrypto`.
 
 ## Working Style
 - One hour-block from the roadmap = one focused session/prompt.
