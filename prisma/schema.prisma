@@ -1,7 +1,13 @@
 // Pine Cleaning QR Feedback System — Prisma schema (v1.5)
-// Source: pine-cleaning-schema-v1_5.sql, with one deviation:
-// feedback_submissions' text field is named `feedback`, not `message`
-// (user override, confirmed 2026-07-24).
+// Source: pine-cleaning-schema-v1_5.sql, with two deviations (both
+// user-confirmed 2026-07-24):
+//   1. feedback_submissions' text field is named `feedback`, not `message`.
+//   2. client_site_status is 2-state (ACTIVE/INACTIVE) — the source SQL's
+//      third ARCHIVED state was dropped as unnecessary complexity.
+//
+// idempotency_key on feedback_submissions is frontend-generated (plain
+// UUID v4 at form-mount) — the backend only enforces the unique
+// constraint, it never derives or hashes the key itself.
 //
 // admin_users.id references Supabase Auth's auth.users(id). Prisma
 // can't model that cross-schema FK directly — add it manually via a
@@ -37,7 +43,6 @@ enum ClickupConnectionStatus {
 enum ClientSiteStatus {
   ACTIVE
   INACTIVE
-  ARCHIVED
 
   @@map("client_site_status")
 }

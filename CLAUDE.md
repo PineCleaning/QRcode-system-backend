@@ -6,7 +6,7 @@ This is the **backend repo** for the QR Feedback System. It is its own git repos
 
 **Scope change (2026-07-23): no n8n.** ClickUp delivery is a single direct API call — there is no parallel webhook path. Do not build any n8n integration or `N8N_WEBHOOK_URL` handling.
 
-**DB schema locked at v1.5 (2026-07-24)** — see `../CLAUDE.md` Section 7 for the full ERD/enums. Key additions vs. the original design: `clickup_connections` (encrypted OAuth token storage), `integration_jobs` (delivery retry engine, replaces a single status column), `idempotency_key` on feedback, `ARCHIVED` as a third client/site status. `csv_upload_*` tables are renamed `csv_import_*`. The `feedback_submissions` text field is `feedback` (user override — the source SQL file names it `message`, do not use that name).
+**DB schema locked at v1.5 (2026-07-24)** — see `../CLAUDE.md` Section 7 for the full ERD/enums. Key additions vs. the original design: `clickup_connections` (encrypted OAuth token storage), `integration_jobs` (delivery retry engine, replaces a single status column), `idempotency_key` on feedback. `csv_upload_*` tables are renamed `csv_import_*`. The `feedback_submissions` text field is `feedback` (user override — the source SQL file names it `message`, do not use that name). **`client_site_status` is 2-state (`ACTIVE`/`INACTIVE`)** — a proposed `ARCHIVED` third state was dropped 2026-07-24, don't add it back.
 
 ## Tech Stack
 - **Framework:** NestJS + TypeScript
@@ -23,7 +23,7 @@ This is the **backend repo** for the QR Feedback System. It is its own git repos
 - QR code generation + download (PNG/JPG/PDF, A4/A5 sized)
 - CSV bulk upload (`/clients/bulk-upload`) — per-row success/error reporting via `csv_import_batches`/`csv_import_rows`
 - Public slug resolution (`/public/{slug}`)
-- Feedback submission (`/feedback/{slug}`) — accepts/validates `idempotency_key`, direct ClickUp API delivery tracked via an `integration_jobs` row (not a simple status column)
+- Feedback submission (`/feedback/{slug}`) — accepts a frontend-generated `idempotency_key` (plain UUID v4, no server-side derivation), direct ClickUp API delivery tracked via an `integration_jobs` row (not a simple status column)
 - Media upload handling via Cloudinary — `feedback_media` stores `cloudinary_public_id` + `resource_type`, not a URL
 - ClickUp OAuth flow (authorize, token exchange) — resulting connection stored encrypted in `clickup_connections`, not just env-config
 - Retry/backoff worker for `integration_jobs` in `PENDING`/`RETRYING` status
@@ -35,12 +35,13 @@ See `.env.example`. Never commit `.env` or paste real secrets into a prompt. Req
 ## Critical Rules
 - **Service role key stays backend-only.** Never expose it to the frontend.
 - **ClickUp uses OAuth**, authorized once through the portal — the resulting access token is stored encrypted in `clickup_connections`, not a static env var. Never log or return the decrypted token.
+- **`CLICKUP_TOKEN_ENCRYPTION_KEY` lives only as a server-side env var** — never write it to the database, never commit it, never log it. Only the encrypted token (`clickup_connections.encrypted_access_token`) is persisted.
 - **Prisma is the source of truth for schema changes** — model changes go through `schema.prisma` + `prisma migrate`, not manual edits in the Supabase dashboard.
 - **Slug uniqueness is enforced at the DB level** (Prisma `@unique`), not just app-level — bulk CSV upload is the likeliest place for a race condition.
 - **CSV bulk upload processes rows individually** — one bad row must not fail the whole batch. Log every batch + row to `csv_import_batches` / `csv_import_rows`.
 - **No n8n, single delivery path** — the direct ClickUp API call is the only way a feedback ticket is created. Every feedback submission gets an `integration_jobs` row driving retry/backoff (`attempt_count`, `next_attempt_at`, `last_error`); there is no fallback path if delivery fails.
-- **Feedback submissions require a unique `idempotency_key`** — reject/dedupe on conflict so a client-side retry can never create two tickets for one submission.
-- **Soft delete via 3-state status** — `clients` and `sites` use `ACTIVE`/`INACTIVE`/`ARCHIVED` (uppercase enum, not free-text). Hard delete is only via explicit API action, and `feedback_submissions.site_id` is `ON DELETE RESTRICT` (see Open Decision #2 in root doc — confirm before changing). Behavioral difference between `INACTIVE` and `ARCHIVED` is still open — see Open Decision #8.
+- **`idempotency_key` is frontend-generated (plain UUID v4), backend just enforces it** — reject/dedupe on the unique constraint; don't hash or derive it server-side.
+- **Soft delete via 2-state status** — `clients` and `sites` use `ACTIVE`/`INACTIVE` only (uppercase enum, not free-text). Do not reintroduce `ARCHIVED` — dropped 2026-07-24. Hard delete is only via explicit API action, and `feedback_submissions.site_id` is `ON DELETE RESTRICT` (see Open Decision #2 in root doc — confirm before changing).
 - **ClickUp rate limits** — add retry/backoff on ClickUp calls, especially during bulk uploads. Never let a failed sync fail silently.
 - Full DB schema: see root-level reference doc or the current `schema.prisma` — do not assume table shape without checking.
 
@@ -56,9 +57,10 @@ Before building the related endpoint, confirm these with the user (full list in 
 5. ~~Cloudflare product choice~~ — resolved: Cloudinary. Confirm upload preset/transformation settings.
 6. Upload flow — client → Cloudinary direct (signed upload) vs. client → backend → Cloudinary. `feedback_media.status` (`PENDING`/`VERIFIED`/`REJECTED`) implies signed-direct-upload-then-verify.
 7. Domain/slug routing (affects `BASE_DOMAIN` and QR generation — must be locked before QR codes are printed).
-8. `INACTIVE` vs. `ARCHIVED` semantics for clients/sites — do both block ticket creation on `/public/{slug}`, or just one?
-9. `idempotency_key` generation — frontend-generated (client-side UUID at form load) or backend-derived?
-10. ClickUp token encryption strategy — app-level key (`CLICKUP_TOKEN_ENCRYPTION_KEY`) vs. Postgres `pgcrypto`.
+8. ~~`INACTIVE` vs. `ARCHIVED`~~ — resolved 2026-07-24: `ARCHIVED` dropped, 2-state status only.
+9. ~~`idempotency_key` generation~~ — resolved 2026-07-24: frontend UUID v4, backend enforces via unique constraint.
+10. ~~ClickUp token encryption strategy~~ — resolved 2026-07-24: app-level `CLICKUP_TOKEN_ENCRYPTION_KEY`, server-env-only.
+11. Max file attachments per feedback submission — not yet specified, still open (raised 2026-07-24).
 
 ## Working Style
 - One hour-block from the roadmap = one focused session/prompt.
