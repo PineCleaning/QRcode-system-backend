@@ -46,8 +46,31 @@ Confirmed against the client's real ClickUp workspace. Full detail also in `../.
 - **Company record writes are partial-write only** — the portal writes just its own fields (name, contact email, contact phone, status-equivalent) when creating/updating a Company task. Never touch other fields on that record (Facility Type, Cleaning Frequency, Date Quote Accepted, Upcoming Tasks, etc.) — those belong to the client's own team and must survive a portal sync untouched.
 - **Never create ClickUp Lists, Folders, Spaces, or custom fields programmatically** — the integration is read/write against structure that already exists, full stop.
 
+## ClickUp Integration Module (Day 1 Hr 6 — implemented 2026-07-24, awaiting real credentials)
+
+Built end-to-end but **not yet live-tested against real ClickUp** — the user doesn't have `CLICKUP_CLIENT_ID`/`CLICKUP_CLIENT_SECRET` yet. Everything is designed to start working the moment those (and the two List IDs) are supplied, with **no code changes needed** — see "How this activates" below.
+
+- `src/clickup/clickup-crypto.util.ts` — AES-256-GCM encrypt/decrypt for the ClickUp access token, keyed by `CLICKUP_TOKEN_ENCRYPTION_KEY` (already generated and set in `.env` — this one doesn't depend on ClickUp at all).
+- `src/clickup/clickup-api.client.ts` (`ClickupApiClient`) — thin wrapper over the raw ClickUp v2 REST API (`fetch`-based). No business logic. Note: ClickUp expects the raw access token in the `Authorization` header with **no `Bearer` prefix** — this is a ClickUp-specific quirk, not a bug if it looks unusual.
+- `src/clickup/clickup-connection.service.ts` (`ClickupConnectionService`) — owns the `clickup_connections` row: encrypts/decrypts the token, upserts the connection, caches list/field config, and signs/verifies the OAuth `state` param via HMAC (keyed by the same encryption key) instead of a server-side session store — stateless, no extra infra.
+- `src/clickup/clickup.service.ts` (`ClickupService`) — domain-level `createCompany`/`updateCompany`. **Design choice:** contact email/phone are written into the Company task's native `description` field (not custom fields), and our `ACTIVE`/`INACTIVE` maps to ClickUp's native task `status` (names configurable via `CLICKUP_COMPANY_STATUS_ACTIVE`/`CLICKUP_COMPANY_STATUS_INACTIVE` env vars, default `"active"`/`"inactive"`). This was a deliberate simplification to avoid needing more `clickup_connections` columns for extra custom-field IDs, and it has a nice side effect: since custom fields are never included in the update payload at all, it's structurally impossible for this service to accidentally overwrite a custom field it doesn't own (Facility Type, Cleaning Frequency, etc.).
+- `src/clickup/clickup.controller.ts` — 4 endpoints:
+  - `GET /clickup/oauth/authorize` (admin-guarded) — returns the ClickUp authorize URL.
+  - `GET /clickup/oauth/callback` (public — ClickUp calls this directly; the signed `state` is the actual auth check) — exchanges the code, fetches the authorized workspace, stores the encrypted connection.
+  - `POST /clickup/setup` (admin-guarded, body `{ ticketsListId, companiesListId, clientFieldName? }`) — one-time step after connecting: fetches the `TICKETS` list's fields, finds the one named `clientFieldName` (default `"CLIENT NAME"`), caches its `field_id`. Read-only against ClickUp — never creates anything.
+  - `GET /clickup/status` (admin-guarded) — debug/verification endpoint: connection + config state.
+
+**How this activates once real values exist:**
+1. Get a ClickUp OAuth app (Client ID/Secret) → set `CLICKUP_CLIENT_ID`/`CLICKUP_CLIENT_SECRET` in `.env`.
+2. Sign in as the test admin (or any admin), call `GET /clickup/oauth/authorize`, open the returned `url` in a browser, approve access.
+3. Find the `TICKETS` and `COMPANIES` list IDs in ClickUp (open each list, copy the ID from the URL after `/li/`), call `POST /clickup/setup` with them.
+4. `GET /clickup/status` should show `configured: true`. `ClickupService.createCompany`/`updateCompany` are then usable by the Clients API (Day 1 Hr 7, not yet built).
+
+Verified 2026-07-24 (without real ClickUp credentials, since none exist yet): app boots with all 4 routes mapped; `/clickup/status` correctly reports `{connected: false}`; `/clickup/oauth/authorize` returns a correctly-shaped URL (with an empty `client_id` right now, which will just work once the env var is set); `/clickup/oauth/callback` correctly rejects invalid/missing `state`; `/clickup/setup` correctly 404s when no connection exists yet.
+
 ## Responsibilities
 - Admin auth (JWT verification against Supabase Auth, via a NestJS guard) — done, see above
+- ClickUp OAuth connect + one-time list/field config — done, see above (awaiting real credentials to live-test)
 - Clients CRUD (`/clients`) — every mutation syncs to the matching ClickUp Company record (partial-write, see above), stores `clickup_entity_id`
 - Sites CRUD (`/sites`) — slug generation/enforcement; no ClickUp sync for sites yet (no structured counterpart)
 - QR code generation + download (PNG/JPG/PDF, A4/A5 sized)
@@ -55,12 +78,11 @@ Confirmed against the client's real ClickUp workspace. Full detail also in `../.
 - Public slug resolution (`/public/{slug}`)
 - Feedback submission (`/feedback/{slug}`) — accepts a frontend-generated `idempotency_key` (plain UUID v4, no server-side derivation), delivered as a Task in `TICKETS` (Relationship field set to the client's `clickup_entity_id`, site as plain text), tracked via an `integration_jobs` row (not a simple status column)
 - Media upload handling via Cloudinary — `feedback_media` stores `cloudinary_public_id` + `resource_type`, not a URL
-- ClickUp OAuth flow (authorize, token exchange) — resulting connection stored encrypted in `clickup_connections`, not just env-config
 - Retry/backoff worker for `integration_jobs` in `PENDING`/`RETRYING` status
 
 ## Environment Variables
 See `.env.example`. Never commit `.env` or paste real secrets into a prompt. Required:
-`DATABASE_URL`, `SUPABASE_URL`, `SUPABASE_SERVICE_KEY`, `SUPABASE_ANON_KEY`, `CLICKUP_CLIENT_ID`, `CLICKUP_CLIENT_SECRET`, `CLICKUP_REDIRECT_URI`, `CLICKUP_TOKEN_ENCRYPTION_KEY` (encrypts `clickup_connections.encrypted_access_token`), `CLICKUP_WORKSPACE_ID`, `CLICKUP_LIST_ID`, `CLOUDINARY_CLOUD_NAME`, `CLOUDINARY_API_KEY`, `CLOUDINARY_API_SECRET`, `BASE_DOMAIN`.
+`DATABASE_URL`, `SUPABASE_URL`, `SUPABASE_SERVICE_KEY`, `SUPABASE_ANON_KEY`, `CLICKUP_CLIENT_ID`, `CLICKUP_CLIENT_SECRET`, `CLICKUP_REDIRECT_URI`, `CLICKUP_TOKEN_ENCRYPTION_KEY` (encrypts `clickup_connections.encrypted_access_token` — already generated, see `.env`), `CLOUDINARY_CLOUD_NAME`, `CLOUDINARY_API_KEY`, `CLOUDINARY_API_SECRET`, `BASE_DOMAIN`. Optional: `CLICKUP_COMPANY_STATUS_ACTIVE`/`CLICKUP_COMPANY_STATUS_INACTIVE` (ClickUp task status names for Company records, default `"active"`/`"inactive"`). `CLICKUP_WORKSPACE_ID`/`CLICKUP_LIST_ID` from earlier drafts are **superseded** — list/field IDs now live in `clickup_connections`, set via `POST /clickup/setup`, not env vars.
 
 ## Critical Rules
 - **Service role key stays backend-only.** Never expose it to the frontend.
