@@ -103,16 +103,27 @@ Verified 2026-07-25 against the live Supabase project: sequential slugs (`sevene
 
 Verified 2026-07-25 against a live client+site: PNG downloads correctly (visually confirmed — a clean, well-formed QR), PDF downloads correctly at both A4 and A5 (valid single-page PDFs), invalid `format` values rejected with 400, nonexistent site 404s, unauthenticated requests 401.
 
+## Cloudinary Direct-Upload Signing (Day 2 Hr 5 — implemented 2026-07-25, awaiting real credentials)
+
+`src/cloudinary/` — implements the resolved Open Decision #6 (direct signed upload, confirmed 2026-07-25 from the Core User Flows doc: "Media uploads directly to Cloudinary with visible progress"). Same self-activating pattern as the ClickUp module: built now with empty `CLOUDINARY_*` env vars, starts working the moment real values are added, no code changes needed.
+
+- **`CloudinaryService.generateSignedUploadParams(folder?)`** — signs upload params (`timestamp` + optional `folder`) using the Cloudinary SDK's `utils.api_sign_request`, so the API secret never leaves the server. The frontend gets back `{ signature, timestamp, apiKey, cloudName, folder }` and uses those to upload the file **directly to Cloudinary** — the file itself never touches our backend.
+- **`CloudinaryService.verifyResource(publicId, resourceType)`** — for Day 2 Hr 6 to call after a client claims it uploaded something: confirms the asset genuinely exists in Cloudinary via the Admin API before trusting it and marking `feedback_media.status` `VERIFIED` (vs. `REJECTED` for a spoofed/fabricated `public_id`). Returns `null` on any failure rather than throwing — verified this degrades cleanly with empty credentials (a 404 from Cloudinary's API, caught, returns `null`).
+- **`POST /uploads/cloudinary-signature`** (body: `{ folder? }`) — **deliberately public, no `SupabaseAuthGuard`.** Unlike every other endpoint in this repo so far, this one is called from the anonymous public feedback form (Day 4), not the admin portal, so it can't require an admin session.
+- **`cloudinary` npm package is pure JS**, no native binary — confirmed via its `package.json` (single dependency, no `node-gyp`/native build step) — safe given this machine's Smart App Control history.
+
+Verified 2026-07-25 without real Cloudinary credentials: app boots fine (empty `CLOUDINARY_*` values don't crash startup, same as ClickUp), the signature endpoint returns a well-formed response (empty `apiKey`/`cloudName` today, populates correctly once real values are added — the signing *logic* itself runs correctly regardless), and DTO validation on `folder` works. `verifyResource` confirmed to fail gracefully (returns `null`) rather than throw when Cloudinary rejects the request due to missing credentials.
+
 ## Responsibilities
 - Admin auth (JWT verification against Supabase Auth, via a NestJS guard) — done, see above
 - ClickUp OAuth connect + one-time list/field config — done, see above (awaiting real credentials to live-test)
 - Clients CRUD (`/clients`) — done, see above
 - Sites CRUD (`/sites`) — done, see above
-- QR code generation + download (PNG/JPG/PDF, A4/A5 sized)
+- QR code generation + download (PNG/PDF, A4/A5 sized) — done, see above
 - CSV bulk upload (`/clients/bulk-upload`) — per-row success/error reporting via `csv_import_batches`/`csv_import_rows`
 - Public slug resolution (`/public/{slug}`)
 - Feedback submission (`/feedback/{slug}`) — accepts a frontend-generated `idempotency_key` (plain UUID v4, no server-side derivation), delivered as a Task in `TICKETS` (Relationship field set to the client's `clickup_entity_id`, site as plain text), tracked via an `integration_jobs` row (not a simple status column)
-- Media upload handling via Cloudinary — `feedback_media` stores `cloudinary_public_id` + `resource_type`, not a URL
+- Media upload handling via Cloudinary — signing done, see above; `feedback_media` will store `cloudinary_public_id` + `resource_type`, not a URL (wired up in Day 2 Hr 6)
 - Retry/backoff worker for `integration_jobs` in `PENDING`/`RETRYING` status
 
 ## Environment Variables

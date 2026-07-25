@@ -29,6 +29,7 @@
     "@supabase/supabase-js": "^2.110.8",
     "class-transformer": "^0.5.1",
     "class-validator": "^0.15.1",
+    "cloudinary": "^2.10.0",
     "dotenv": "^17.4.2",
     "pdfkit": "^0.19.1",
     "pg": "^8.22.0",
