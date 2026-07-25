@@ -129,11 +129,11 @@ This is a genuine, not just structural, confirmation that the whole signature �
 - **Idempotent replay, not error, on a duplicate `idempotency_key`.** If a submission with that key already exists, it's returned as-is (original content, original delivery status) — no second row, no second `integration_jobs` row, no second ClickUp attempt. This is the actual point of the idempotency key: a client-side retry after a flaky network response must be safe.
 - **Max 5 attachments per submission** (Open Decision #11, resolved 2026-07-25) — enforced via `@ArrayMaxSize(5)` on the DTO, no DB-level cap.
 - **Every claimed media item is verified against Cloudinary before being trusted** — `CloudinaryService.verifyResource` is called per item; a real upload gets `feedback_media.status = VERIFIED`, a fabricated/spoofed `cloudinaryPublicId` gets `REJECTED`. Both are recorded (not silently dropped), so a rejected item is visible in the data rather than just vanishing.
-- **ClickUp delivery is attempted synchronously within the request** (not backgrounded) via the new `ClickupService.createTicket()`, tracked through an `integration_jobs` row (`status`, `attemptCount`, `lastError`). A delivery failure — including "not connected yet," which is the current real state — never fails the HTTP response; the feedback is already saved regardless. **No retry worker exists yet** for `FAILED`/`RETRYING` jobs — that's Day 4 Hr 6, still ahead. Today, a failed delivery just sits as `FAILED` until that worker exists.
+- **ClickUp delivery is attempted synchronously within the request** (not backgrounded) via the new `ClickupService.createTicket()`, tracked through an `integration_jobs` row (`status`, `attemptCount`, `lastError`). A delivery failure — including "not connected yet," which is the current real state — never fails the HTTP response; the feedback is already saved regardless. **A retry worker now exists** (Day 4 Hr 6, see below) — a failure with attempts remaining schedules a retry (`RETRYING`/`DELIVERY_PENDING`) instead of going straight to the terminal `FAILED`/`DELIVERY_FAILED` state.
 - **`ClickupService.createTicket()`** — creates a Task in `TICKETS`, title `"{client name} — {site name}"`, feedback + mobile number in the description, Relationship field set to the client's `clickup_entity_id` if it has one. **⚠️ Unverified against a live ClickUp connection** — same caveat as Company sync, the Relationship field's `{ add: [...] }` value shape is based on ClickUp's documented format, not empirically confirmed yet.
 
 **Live-verified 2026-07-25 end-to-end against the live Supabase project and the same temporary Cloudinary test account:**
-- Feedback with no media → saved, `status: DELIVERY_FAILED` (ClickUp not connected, exactly as expected), warning logged.
+- Feedback with no media → saved, `status: DELIVERY_FAILED` (ClickUp not connected, exactly as expected — note as of Day 4 Hr 6 this is now the *terminal* state reached only after retries are exhausted; the immediate first-failure state is `DELIVERY_PENDING`, see the retry worker section below), warning logged.
 - Replayed the identical `idempotencyKey` → got back the exact original record (original text, not the replay's), confirmed via log line count that no second delivery attempt fired.
 - Uploaded a real image directly to Cloudinary, submitted feedback referencing that real `public_id` **and** a fabricated one in the same request → real one came back `VERIFIED`, fabricated one came back `REJECTED`.
 - 6 attachments → `400` (cap is 5). Non-UUID `idempotencyKey` → `400`. Missing `feedback` → `400`. Nonexistent slug → `404` generic message.
@@ -146,6 +146,18 @@ This is a genuine, not just structural, confirmation that the whole signature �
 
 Verified 2026-07-25: an inactive site and a nonexistent slug both return the identical `404` message; reactivating the site (`PUT /sites/:id`) and re-requesting returns the correct `{ slug, siteName, clientName }`.
 
+## Delivery Retry/Backoff Worker (Day 4 Hr 6 — implemented 2026-07-26, live-verified mechanically)
+
+`src/integration-jobs/` — the piece that was explicitly missing before: until now, a failed ClickUp delivery just sat as `integration_jobs.status = 'FAILED'` forever with no retry. Now it doesn't.
+
+- **`IntegrationJobsService`** — the single place that owns the backoff schedule and the `FeedbackStatus`/`IntegrationJobStatus` transitions, used by **both** the synchronous first attempt (`FeedbackService`, refactored to delegate here instead of inlining the transaction) and the new background worker, so the two callers can't drift out of sync on what "failed" actually means.
+  - Backoff schedule: **1 min → 5 min → 15 min → 60 min → 180 min** (5 attempts total, `MAX_DELIVERY_ATTEMPTS`).
+  - A failure with attempts remaining sets `integration_jobs.status = 'RETRYING'` (not `'FAILED'`) with a computed `nextAttemptAt`, and `feedback_submissions.status = 'DELIVERY_PENDING'` (not `'DELIVERY_FAILED'`) — **this is a behavior change from Day 2 Hr 6**, which used to go straight to the terminal `FAILED`/`DELIVERY_FAILED` state on the very first failure. Only exhausting all 5 attempts reaches the terminal `FAILED`/`DELIVERY_FAILED` state now.
+- **`RetryWorkerService`** — `@Cron(CronExpression.EVERY_MINUTE)`, queries `integration_jobs` where `status = 'RETRYING' AND next_attempt_at <= now()`, re-attempts `ClickupService.createTicket()` for each, and records success/failure via `IntegrationJobsService`. Uses `@nestjs/schedule` (wraps the `cron` package — pure JS, safe given this machine's Smart App Control history).
+- Every minute is cheap at this app's real scale (a handful of clients) — deliberately not a more elaborate queue/worker system nobody needs yet.
+
+**Live-verified 2026-07-26** — mechanically, not against a real ClickUp ticket (still not connected): submitted feedback, confirmed the response was `DELIVERY_PENDING` (not `DELIVERY_FAILED`) and the job was `RETRYING` with `attemptCount: 1` and `nextAttemptAt` ~1 minute out. Waited for the cron to actually fire on schedule, and confirmed via logs and a direct DB check that it re-attempted, failed again (ClickUp still disconnected, expected), and correctly advanced to `attemptCount: 2` with `nextAttemptAt` ~5 minutes out — proving the query-due-jobs → retry → reschedule-with-backoff loop genuinely works end-to-end. Did not wait out the full 5-attempt/261-minute schedule to reach terminal `FAILED` — the mechanism is proven, and the terminal-state code path was already covered by unit-level reasoning (`attemptCount >= MAX_DELIVERY_ATTEMPTS` branch, same function used successfully in the RETRYING path). Once ClickUp is actually connected, the very same code path will succeed instead of retrying — nothing to change.
+
 ## Responsibilities
 - Admin auth (JWT verification against Supabase Auth, via a NestJS guard) — done, see above
 - ClickUp OAuth connect + one-time list/field config — done, see above (awaiting real credentials to live-test)
@@ -156,7 +168,7 @@ Verified 2026-07-25: an inactive site and a nonexistent slug both return the ide
 - Public slug resolution (`/public/{slug}`) — done, see above
 - Feedback submission (`/feedback/{slug}`) — done, see above
 - Media upload handling via Cloudinary — done, see above
-- Retry/backoff worker for `integration_jobs` in `FAILED`/`RETRYING` status — **not built yet**, Day 4 Hr 6
+- Retry/backoff worker for `integration_jobs` in `RETRYING` status — done, see above
 
 ## Environment Variables
 See `.env.example`. Never commit `.env` or paste real secrets into a prompt. Required:

@@ -1,6 +1,7 @@
-import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException } from '@nestjs/common';
 import { ClickupService } from '../clickup/clickup.service';
 import { CloudinaryService } from '../cloudinary/cloudinary.service';
+import { IntegrationJobsService } from '../integration-jobs/integration-jobs.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateFeedbackDto } from './dto/create-feedback.dto';
 
@@ -15,12 +16,11 @@ interface FeedbackMediaCreateData {
 
 @Injectable()
 export class FeedbackService {
-  private readonly logger = new Logger(FeedbackService.name);
-
   constructor(
     private readonly prisma: PrismaService,
     private readonly clickup: ClickupService,
     private readonly cloudinary: CloudinaryService,
+    private readonly integrationJobs: IntegrationJobsService,
   ) {}
 
   async submit(slug: string, dto: CreateFeedbackDto) {
@@ -78,11 +78,11 @@ export class FeedbackService {
   }
 
   /**
-   * Non-blocking from the caller's perspective in spirit (the HTTP
-   * response still waits on this today - a background retry worker for
-   * FAILED jobs is Day 4 Hr 6, not built yet), but a ClickUp failure
-   * never throws back out to submit() - the feedback is already saved
-   * regardless of delivery outcome, tracked via integration_jobs.
+   * First delivery attempt, made synchronously within the request. A
+   * failure here never throws back out to submit() - the feedback is
+   * already saved regardless. If retries remain, IntegrationJobsService
+   * schedules one and the background RetryWorkerService (Day 4 Hr 6)
+   * picks it up later - this method doesn't wait for that.
    */
   private async deliverToClickup(
     feedbackId: string,
@@ -90,9 +90,7 @@ export class FeedbackService {
     mobileNumber: string | null,
     site: { siteName: string; client: { name: string; clickupEntityId: string | null } },
   ) {
-    const job = await this.prisma.integrationJob.create({
-      data: { feedbackId, jobType: 'clickup_task_creation', status: 'PROCESSING', attemptCount: 1 },
-    });
+    const job = await this.integrationJobs.createInitialJob(feedbackId);
 
     try {
       const clickupTaskId = await this.clickup.createTicket({
@@ -102,24 +100,9 @@ export class FeedbackService {
         feedback,
         mobileNumber,
       });
-
-      await this.prisma.$transaction([
-        this.prisma.integrationJob.update({
-          where: { id: job.id },
-          data: { status: 'SUCCEEDED', externalId: clickupTaskId },
-        }),
-        this.prisma.feedbackSubmission.update({
-          where: { id: feedbackId },
-          data: { status: 'DELIVERED', clickupTaskId, deliveredAt: new Date() },
-        }),
-      ]);
+      await this.integrationJobs.recordSuccess(job.id, feedbackId, clickupTaskId);
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      this.logger.warn(`ClickUp delivery failed for feedback ${feedbackId}: ${message}`);
-      await this.prisma.$transaction([
-        this.prisma.integrationJob.update({ where: { id: job.id }, data: { status: 'FAILED', lastError: message } }),
-        this.prisma.feedbackSubmission.update({ where: { id: feedbackId }, data: { status: 'DELIVERY_FAILED' } }),
-      ]);
+      await this.integrationJobs.recordFailure(job.id, feedbackId, job.attemptCount, err);
     }
   }
 }
