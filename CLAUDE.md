@@ -92,6 +92,17 @@ Verified 2026-07-24 (without real ClickUp credentials, since none exist yet): ap
 
 Verified 2026-07-25 against the live Supabase project: sequential slugs (`seveneleven-01`, `-02`, `-03`) generated correctly across multiple sites under one client, 404 on a nonexistent client, list/get/update/delete all correct, and an update payload trying to override `slug`/`siteCode` was silently stripped rather than applied.
 
+## QR Generation (Day 2 Hr 1–3 — implemented 2026-07-25)
+
+`src/qr/qr.service.ts` (`QrService`) + `GET /sites/:id/qr?format=png|pdf&size=A4|A5` on `SitesController` (admin-guarded). QR codes are generated **on demand from the site's slug** — nothing is cached or stored; there's no `qr_code_url` column in v1.5 (unlike the earlier draft schema).
+
+- **PNG only, deliberately no JPG** even though the roadmap says "PNG/JPG": JPEG's lossy compression can introduce artifacts that make a QR code fail to scan, so offering it would be strictly worse with no upside. PNG generation uses the `qrcode` package (pure JS, no native binary — safe given this machine's Smart App Control history).
+- **PDF** uses `pdfkit` (also pure JS). Page size is literally `'A4'`/`'A5'` via pdfkit's built-in support — no manual mm/pt math. Layout is deliberately minimal per "card/sticker design is not in scope, only the raw QR file": QR code centered, with client name / site name / slug printed below as a small caption purely so printed sheets stay identifiable when handling many of them — not a designed card.
+- **Target URL**: `{BASE_DOMAIN}/{slug}`. `BASE_DOMAIN` is empty right now (Open Decision #7, domain routing, is still unresolved) — `QrService.buildTargetUrl` falls back to `http://localhost:3000` when unset, so QR generation and testing both work today. **This is a real risk to flag**: once `BASE_DOMAIN` is set and QR codes are actually printed, changing it again means every printed QR breaks (same warning already in the root doc's Open Decision #7 and Notes/Risks). Lock the domain before any real printing happens.
+- **A pdfkit/TypeScript gotcha worth knowing about**: `@types/pdfkit` mistypes the module's export as a `PDFDocument` *instance* rather than the constructor, even though the real CommonJS export is the class. `import * as PDFDocument from 'pdfkit'` type-checks fine but throws `TypeError: PDFDocument is not a constructor` at runtime (hit and fixed during this hour). Fixed via `import PDFDocument = require('pdfkit')`, which bypasses the ESM-interop wrapping and gets the raw export. If pdfkit code ever needs touching again, don't "fix" this back to a normal `import` statement — it will silently reintroduce the runtime bug despite compiling cleanly.
+
+Verified 2026-07-25 against a live client+site: PNG downloads correctly (visually confirmed — a clean, well-formed QR), PDF downloads correctly at both A4 and A5 (valid single-page PDFs), invalid `format` values rejected with 400, nonexistent site 404s, unauthenticated requests 401.
+
 ## Responsibilities
 - Admin auth (JWT verification against Supabase Auth, via a NestJS guard) — done, see above
 - ClickUp OAuth connect + one-time list/field config — done, see above (awaiting real credentials to live-test)

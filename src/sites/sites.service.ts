@@ -58,6 +58,15 @@ export class SitesService {
     return site;
   }
 
+  /** Used for the QR PDF caption, which shows client name alongside the site. */
+  async findOneWithClient(id: string) {
+    const site = await this.prisma.site.findUnique({ where: { id }, include: { client: true } });
+    if (!site) {
+      throw new NotFoundException(`Site ${id} not found`);
+    }
+    return site;
+  }
+
   async update(id: string, dto: UpdateSiteDto) {
     await this.findOne(id); // 404s if missing
 
