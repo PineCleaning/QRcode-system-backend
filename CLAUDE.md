@@ -103,16 +103,23 @@ Verified 2026-07-25 against the live Supabase project: sequential slugs (`sevene
 
 Verified 2026-07-25 against a live client+site: PNG downloads correctly (visually confirmed — a clean, well-formed QR), PDF downloads correctly at both A4 and A5 (valid single-page PDFs), invalid `format` values rejected with 400, nonexistent site 404s, unauthenticated requests 401.
 
-## Cloudinary Direct-Upload Signing (Day 2 Hr 5 — implemented 2026-07-25, awaiting real credentials)
+## Cloudinary Direct-Upload Signing (Day 2 Hr 5 — implemented 2026-07-25, live-verified)
 
-`src/cloudinary/` — implements the resolved Open Decision #6 (direct signed upload, confirmed 2026-07-25 from the Core User Flows doc: "Media uploads directly to Cloudinary with visible progress"). Same self-activating pattern as the ClickUp module: built now with empty `CLOUDINARY_*` env vars, starts working the moment real values are added, no code changes needed.
+`src/cloudinary/` — implements the resolved Open Decision #6 (direct signed upload, confirmed 2026-07-25 from the Core User Flows doc: "Media uploads directly to Cloudinary with visible progress"). Built with the same self-activating pattern as ClickUp, but this one is now **fully live-verified** — the user created a real (temporary, personal) Cloudinary account specifically so this could be tested end-to-end rather than just structurally, ahead of swapping in the client's real Cloudinary account later. Swapping accounts later is just three env var values changing — nothing else to touch.
 
 - **`CloudinaryService.generateSignedUploadParams(folder?)`** — signs upload params (`timestamp` + optional `folder`) using the Cloudinary SDK's `utils.api_sign_request`, so the API secret never leaves the server. The frontend gets back `{ signature, timestamp, apiKey, cloudName, folder }` and uses those to upload the file **directly to Cloudinary** — the file itself never touches our backend.
-- **`CloudinaryService.verifyResource(publicId, resourceType)`** — for Day 2 Hr 6 to call after a client claims it uploaded something: confirms the asset genuinely exists in Cloudinary via the Admin API before trusting it and marking `feedback_media.status` `VERIFIED` (vs. `REJECTED` for a spoofed/fabricated `public_id`). Returns `null` on any failure rather than throwing — verified this degrades cleanly with empty credentials (a 404 from Cloudinary's API, caught, returns `null`).
+- **`CloudinaryService.verifyResource(publicId, resourceType)`** — for Day 2 Hr 6 to call after a client claims it uploaded something: confirms the asset genuinely exists in Cloudinary via the Admin API before trusting it and marking `feedback_media.status` `VERIFIED` (vs. `REJECTED` for a spoofed/fabricated `public_id`).
 - **`POST /uploads/cloudinary-signature`** (body: `{ folder? }`) — **deliberately public, no `SupabaseAuthGuard`.** Unlike every other endpoint in this repo so far, this one is called from the anonymous public feedback form (Day 4), not the admin portal, so it can't require an admin session.
 - **`cloudinary` npm package is pure JS**, no native binary — confirmed via its `package.json` (single dependency, no `node-gyp`/native build step) — safe given this machine's Smart App Control history.
 
-Verified 2026-07-25 without real Cloudinary credentials: app boots fine (empty `CLOUDINARY_*` values don't crash startup, same as ClickUp), the signature endpoint returns a well-formed response (empty `apiKey`/`cloudName` today, populates correctly once real values are added — the signing *logic* itself runs correctly regardless), and DTO validation on `folder` works. `verifyResource` confirmed to fail gracefully (returns `null`) rather than throw when Cloudinary rejects the request due to missing credentials.
+**Live-verified 2026-07-25 against a real (temporary) Cloudinary account:**
+1. Requested a real signature from `POST /uploads/cloudinary-signature` — got back real `apiKey`/`cloudName`, not placeholders.
+2. Used that signature to upload a real 1x1 PNG **directly to Cloudinary's API** (bypassing the backend entirely for the file itself, exactly as the real frontend flow will) — succeeded, returned a real `public_id`.
+3. Called `verifyResource` with that real `public_id` — correctly found it (`format`, `bytes` matched).
+4. Called `verifyResource` with a fabricated/spoofed `public_id` — correctly returned `null` (Cloudinary 404'd it, caught cleanly).
+5. Cleaned up the test asset afterward via `cloudinary.uploader.destroy`.
+
+This is a genuine, not just structural, confirmation that the whole signature → direct-upload → verify pipeline works exactly as designed.
 
 ## Responsibilities
 - Admin auth (JWT verification against Supabase Auth, via a NestJS guard) — done, see above
