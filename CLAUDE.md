@@ -68,10 +68,21 @@ Built end-to-end but **not yet live-tested against real ClickUp** — the user d
 
 Verified 2026-07-24 (without real ClickUp credentials, since none exist yet): app boots with all 4 routes mapped; `/clickup/status` correctly reports `{connected: false}`; `/clickup/oauth/authorize` returns a correctly-shaped URL (with an empty `client_id` right now, which will just work once the env var is set); `/clickup/oauth/callback` correctly rejects invalid/missing `state`; `/clickup/setup` correctly 404s when no connection exists yet.
 
+## Clients API (Day 1 Hr 7 — implemented 2026-07-25)
+
+`src/clients/` — full CRUD, admin-guarded (`@UseGuards(SupabaseAuthGuard)` on the whole controller):
+- `POST /clients` — `clientCode` (immutable, lowercase alphanumeric+hyphen, validated via regex), `name`, optional `contactEmail`/`contactPhone`. Duplicate `clientCode` → `409 Conflict` (caught from Prisma's `P2002`).
+- `GET /clients` — list, newest first, each row includes `_count.sites`.
+- `GET /clients/:id` — 404s via `NotFoundException` if missing.
+- `PUT /clients/:id` — `UpdateClientDto` deliberately has **no `clientCode` field at all** (not just ignored — it's not a property on the DTO), and the global `ValidationPipe`'s `whitelist: true` strips any extra property before it reaches the service, so a client can never rename its own `clientCode` through this endpoint even if a caller tries.
+- `DELETE /clients/:id` — **hard delete**, `204` on success. Relies on the DB's own cascade rules: deleting a client cascades to its sites, but a site with feedback history is `ON DELETE RESTRICT` — so the whole delete fails atomically (caught as Prisma's `P2003`, surfaced as `409 Conflict` telling the caller to deactivate instead). No separate "soft delete" endpoint — deactivating is just `PUT` with `{ status: "INACTIVE" }`.
+
+**ClickUp sync is non-blocking**, per explicit decision: every create/update attempts a sync to the matching Company record, but a ClickUp failure (or ClickUp not being connected/configured at all, which is the current state) is caught, logged via `Logger.warn`, and never fails the request. A client created while ClickUp is disconnected has `clickupEntityId: null`; the **next** update to that client automatically retries the sync as a create (self-healing — no separate "retry sync" endpoint needed). Verified 2026-07-25 with ClickUp still unconnected: create/list/get/update/delete/validation/duplicate/404/401 all behave correctly, and the server log shows the expected `ClickUp sync failed for client ...: No ClickUp connection found` warning without affecting the API response.
+
 ## Responsibilities
 - Admin auth (JWT verification against Supabase Auth, via a NestJS guard) — done, see above
 - ClickUp OAuth connect + one-time list/field config — done, see above (awaiting real credentials to live-test)
-- Clients CRUD (`/clients`) — every mutation syncs to the matching ClickUp Company record (partial-write, see above), stores `clickup_entity_id`
+- Clients CRUD (`/clients`) — done, see above
 - Sites CRUD (`/sites`) — slug generation/enforcement; no ClickUp sync for sites yet (no structured counterpart)
 - QR code generation + download (PNG/JPG/PDF, A4/A5 sized)
 - CSV bulk upload (`/clients/bulk-upload`) — per-row success/error reporting via `csv_import_batches`/`csv_import_rows`
