@@ -7,6 +7,7 @@ import { ClickupModule } from './clickup/clickup.module';
 import { ClientsModule } from './clients/clients.module';
 import { HealthController } from './health/health.controller';
 import { PrismaModule } from './prisma/prisma.module';
+import { SitesModule } from './sites/sites.module';
 import { SupabaseModule } from './supabase/supabase.module';
 
 @Module({
@@ -19,6 +20,7 @@ import { SupabaseModule } from './supabase/supabase.module';
     AuthModule,
     ClickupModule,
     ClientsModule,
+    SitesModule,
   ],
   controllers: [AppController, HealthController],
   providers: [AppService],

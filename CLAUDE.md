@@ -79,11 +79,24 @@ Verified 2026-07-24 (without real ClickUp credentials, since none exist yet): ap
 
 **ClickUp sync is non-blocking**, per explicit decision: every create/update attempts a sync to the matching Company record, but a ClickUp failure (or ClickUp not being connected/configured at all, which is the current state) is caught, logged via `Logger.warn`, and never fails the request. A client created while ClickUp is disconnected has `clickupEntityId: null`; the **next** update to that client automatically retries the sync as a create (self-healing — no separate "retry sync" endpoint needed). Verified 2026-07-25 with ClickUp still unconnected: create/list/get/update/delete/validation/duplicate/404/401 all behave correctly, and the server log shows the expected `ClickUp sync failed for client ...: No ClickUp connection found` warning without affecting the API response.
 
+## Sites API (Day 1 Hr 8 — implemented 2026-07-25)
+
+`src/sites/` — full CRUD, admin-guarded, no ClickUp sync (sites have no structured ClickUp counterpart yet, per the ClickUp Structure Mapping above):
+- `POST /clients/:clientId/sites` — body is just `siteName` + optional `address`. `siteCode` and `slug` are **system-generated, never accepted from the client** — matches the Core User Flows doc's "The system creates a permanent site slug" (not the admin typing one in). 404s if `clientId` doesn't exist.
+- `GET /clients/:clientId/sites` — list sites for a client, ordered by `siteCode` ascending. 404s if the client doesn't exist.
+- `GET /sites/:id` / `PUT /sites/:id` / `DELETE /sites/:id` — flat, don't need the client in the URL since the site's own id is sufficient.
+- `PUT /sites/:id` — `siteName`, `address`, `status` only. Like `clientCode`, `siteCode`/`slug` are absent from `UpdateSiteDto` entirely and stripped by `ValidationPipe`'s whitelist if a caller tries to sneak them in — verified 2026-07-25 by attempting exactly that.
+- `DELETE /sites/:id` — hard delete, same DB-cascade-driven pattern as Clients: `ON DELETE RESTRICT` from `feedback_submissions.site_id` blocks deletion of a site with feedback history, surfaced as `409 Conflict`.
+
+**`site_code` generation:** next sequential number for that client, zero-padded to at least 2 digits (`"01"`, `"02"`, ... `"100"`). Computed by fetching all existing `site_code`s for the client and taking the numeric max **in application code**, not via `ORDER BY site_code DESC` — lexicographic string ordering breaks past 99 (`"100"` sorts before `"99"` as a string), and a single client could plausibly reach 100+ sites eventually. `slug` is `{client_code}-{site_code}`. On a unique-constraint race (two concurrent creates for the same client), the create is retried up to 5 times with a freshly recomputed `site_code` rather than failing — cheap insurance given creation is a rare, low-concurrency admin action, not a hot path.
+
+Verified 2026-07-25 against the live Supabase project: sequential slugs (`seveneleven-01`, `-02`, `-03`) generated correctly across multiple sites under one client, 404 on a nonexistent client, list/get/update/delete all correct, and an update payload trying to override `slug`/`siteCode` was silently stripped rather than applied.
+
 ## Responsibilities
 - Admin auth (JWT verification against Supabase Auth, via a NestJS guard) — done, see above
 - ClickUp OAuth connect + one-time list/field config — done, see above (awaiting real credentials to live-test)
 - Clients CRUD (`/clients`) — done, see above
-- Sites CRUD (`/sites`) — slug generation/enforcement; no ClickUp sync for sites yet (no structured counterpart)
+- Sites CRUD (`/sites`) — done, see above
 - QR code generation + download (PNG/JPG/PDF, A4/A5 sized)
 - CSV bulk upload (`/clients/bulk-upload`) — per-row success/error reporting via `csv_import_batches`/`csv_import_rows`
 - Public slug resolution (`/public/{slug}`)
