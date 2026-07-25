@@ -9,6 +9,7 @@ import { CloudinaryModule } from './cloudinary/cloudinary.module';
 import { FeedbackModule } from './feedback/feedback.module';
 import { HealthController } from './health/health.controller';
 import { PrismaModule } from './prisma/prisma.module';
+import { PublicModule } from './public/public.module';
 import { SitesModule } from './sites/sites.module';
 import { SupabaseModule } from './supabase/supabase.module';
 
@@ -25,6 +26,7 @@ import { SupabaseModule } from './supabase/supabase.module';
     SitesModule,
     CloudinaryModule,
     FeedbackModule,
+    PublicModule,
   ],
   controllers: [AppController, HealthController],
   providers: [AppService],

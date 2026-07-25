@@ -140,6 +140,12 @@ This is a genuine, not just structural, confirmation that the whole signature �
 - Deactivated the test site, retried feedback against it → `404`, identical message to the nonexistent-slug case.
 - As a nice side effect, confirmed the `ON DELETE RESTRICT` chain works end-to-end: once the test site had feedback history, both `DELETE /sites/:id` and `DELETE /clients/:id` correctly returned `409` instead of destroying data.
 
+## Public Resolve-Slug Endpoint (Day 2 Hr 7 — implemented 2026-07-25)
+
+`src/public/` — `GET /public/:slug`, public, no guard. Small and self-contained: given a slug, returns `{ slug, siteName, clientName }` so the (not-yet-built, Day 4) public form can pre-fill its read-only header before rendering. Same generic-404 approach as the feedback API — identical response whether the slug is unknown or deactivated, and the response shape is intentionally minimal (no ids, no status, no client contact info — nothing beyond what a customer-facing header needs).
+
+Verified 2026-07-25: an inactive site and a nonexistent slug both return the identical `404` message; reactivating the site (`PUT /sites/:id`) and re-requesting returns the correct `{ slug, siteName, clientName }`.
+
 ## Responsibilities
 - Admin auth (JWT verification against Supabase Auth, via a NestJS guard) — done, see above
 - ClickUp OAuth connect + one-time list/field config — done, see above (awaiting real credentials to live-test)
@@ -147,7 +153,7 @@ This is a genuine, not just structural, confirmation that the whole signature �
 - Sites CRUD (`/sites`) — done, see above
 - QR code generation + download (PNG/PDF, A4/A5 sized) — done, see above
 - CSV bulk upload (`/clients/bulk-upload`) — per-row success/error reporting via `csv_import_batches`/`csv_import_rows`
-- Public slug resolution (`/public/{slug}`)
+- Public slug resolution (`/public/{slug}`) — done, see above
 - Feedback submission (`/feedback/{slug}`) — done, see above
 - Media upload handling via Cloudinary — done, see above
 - Retry/backoff worker for `integration_jobs` in `FAILED`/`RETRYING` status — **not built yet**, Day 4 Hr 6
