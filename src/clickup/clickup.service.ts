@@ -11,6 +11,15 @@ export interface CompanySyncInput {
   status: string;
 }
 
+export interface TicketInput {
+  clientName: string;
+  /** clients.clickup_entity_id of the client this feedback belongs to - null if that client was never synced to ClickUp. */
+  clientEntityId: string | null;
+  siteName: string;
+  feedback: string;
+  mobileNumber: string | null;
+}
+
 /**
  * High-level ClickUp operations for this app's domain. Talks to
  * ClickupApiClient (raw REST) using the connection cached by
@@ -56,6 +65,39 @@ export class ClickupService {
       description: this.buildDescription(input),
       status: this.mapStatus(input.status),
     });
+  }
+
+  /**
+   * Creates a Task in the TICKETS list for a feedback submission. Site
+   * has no structured ClickUp counterpart (see Structure Mapping) so
+   * it's folded into the title/description as plain text, not a field.
+   *
+   * ⚠️ Unverified against a live ClickUp connection (no real credentials
+   * exist yet, same caveat as Company sync). The Relationship field
+   * value shape ({ add: [...] }) is based on ClickUp's documented
+   * format for relationship-type custom fields, not empirically
+   * confirmed - budget time to debug this specific payload once real
+   * ClickUp access exists.
+   */
+  async createTicket(input: TicketInput): Promise<string> {
+    const { connection, accessToken } = await this.connections.getReadyConnection();
+
+    const customFields = input.clientEntityId
+      ? [{ id: connection.clientFieldId!, value: { add: [input.clientEntityId] } }]
+      : [];
+
+    const task = await this.api.createTask(accessToken, connection.ticketsListId!, {
+      name: `${input.clientName} — ${input.siteName}`,
+      description: this.buildTicketDescription(input),
+      custom_fields: customFields,
+    });
+    return task.id;
+  }
+
+  private buildTicketDescription(input: TicketInput): string {
+    const lines = [`Site: ${input.siteName}`, '', input.feedback];
+    if (input.mobileNumber) lines.push('', `Mobile: ${input.mobileNumber}`);
+    return lines.join('\n');
   }
 
   private buildDescription(input: CompanySyncInput): string {

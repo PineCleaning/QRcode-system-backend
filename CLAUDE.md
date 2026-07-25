@@ -121,6 +121,25 @@ Verified 2026-07-25 against a live client+site: PNG downloads correctly (visuall
 
 This is a genuine, not just structural, confirmation that the whole signature → direct-upload → verify pipeline works exactly as designed.
 
+## Feedback Submission API (Day 2 Hr 6 — implemented 2026-07-25)
+
+`src/feedback/` — `POST /feedback/:slug`, **public, no `SupabaseAuthGuard`** (same reasoning as the Cloudinary signature endpoint: anonymous customers call this, not admins).
+
+- **Site/client must both be `ACTIVE`.** Otherwise the endpoint throws a `404` with a deliberately generic message ("This QR code is not currently active.") — identical whether the slug doesn't exist at all or exists but is deactivated, so a scan of a leftover physical sticker can't be used to probe which client codes are real. No DB row is created and ClickUp is never touched in this case, per Day 4 Hr 5's spec even though that hour's frontend isn't built yet.
+- **Idempotent replay, not error, on a duplicate `idempotency_key`.** If a submission with that key already exists, it's returned as-is (original content, original delivery status) — no second row, no second `integration_jobs` row, no second ClickUp attempt. This is the actual point of the idempotency key: a client-side retry after a flaky network response must be safe.
+- **Max 5 attachments per submission** (Open Decision #11, resolved 2026-07-25) — enforced via `@ArrayMaxSize(5)` on the DTO, no DB-level cap.
+- **Every claimed media item is verified against Cloudinary before being trusted** — `CloudinaryService.verifyResource` is called per item; a real upload gets `feedback_media.status = VERIFIED`, a fabricated/spoofed `cloudinaryPublicId` gets `REJECTED`. Both are recorded (not silently dropped), so a rejected item is visible in the data rather than just vanishing.
+- **ClickUp delivery is attempted synchronously within the request** (not backgrounded) via the new `ClickupService.createTicket()`, tracked through an `integration_jobs` row (`status`, `attemptCount`, `lastError`). A delivery failure — including "not connected yet," which is the current real state — never fails the HTTP response; the feedback is already saved regardless. **No retry worker exists yet** for `FAILED`/`RETRYING` jobs — that's Day 4 Hr 6, still ahead. Today, a failed delivery just sits as `FAILED` until that worker exists.
+- **`ClickupService.createTicket()`** — creates a Task in `TICKETS`, title `"{client name} — {site name}"`, feedback + mobile number in the description, Relationship field set to the client's `clickup_entity_id` if it has one. **⚠️ Unverified against a live ClickUp connection** — same caveat as Company sync, the Relationship field's `{ add: [...] }` value shape is based on ClickUp's documented format, not empirically confirmed yet.
+
+**Live-verified 2026-07-25 end-to-end against the live Supabase project and the same temporary Cloudinary test account:**
+- Feedback with no media → saved, `status: DELIVERY_FAILED` (ClickUp not connected, exactly as expected), warning logged.
+- Replayed the identical `idempotencyKey` → got back the exact original record (original text, not the replay's), confirmed via log line count that no second delivery attempt fired.
+- Uploaded a real image directly to Cloudinary, submitted feedback referencing that real `public_id` **and** a fabricated one in the same request → real one came back `VERIFIED`, fabricated one came back `REJECTED`.
+- 6 attachments → `400` (cap is 5). Non-UUID `idempotencyKey` → `400`. Missing `feedback` → `400`. Nonexistent slug → `404` generic message.
+- Deactivated the test site, retried feedback against it → `404`, identical message to the nonexistent-slug case.
+- As a nice side effect, confirmed the `ON DELETE RESTRICT` chain works end-to-end: once the test site had feedback history, both `DELETE /sites/:id` and `DELETE /clients/:id` correctly returned `409` instead of destroying data.
+
 ## Responsibilities
 - Admin auth (JWT verification against Supabase Auth, via a NestJS guard) — done, see above
 - ClickUp OAuth connect + one-time list/field config — done, see above (awaiting real credentials to live-test)
@@ -129,9 +148,9 @@ This is a genuine, not just structural, confirmation that the whole signature �
 - QR code generation + download (PNG/PDF, A4/A5 sized) — done, see above
 - CSV bulk upload (`/clients/bulk-upload`) — per-row success/error reporting via `csv_import_batches`/`csv_import_rows`
 - Public slug resolution (`/public/{slug}`)
-- Feedback submission (`/feedback/{slug}`) — accepts a frontend-generated `idempotency_key` (plain UUID v4, no server-side derivation), delivered as a Task in `TICKETS` (Relationship field set to the client's `clickup_entity_id`, site as plain text), tracked via an `integration_jobs` row (not a simple status column)
-- Media upload handling via Cloudinary — signing done, see above; `feedback_media` will store `cloudinary_public_id` + `resource_type`, not a URL (wired up in Day 2 Hr 6)
-- Retry/backoff worker for `integration_jobs` in `PENDING`/`RETRYING` status
+- Feedback submission (`/feedback/{slug}`) — done, see above
+- Media upload handling via Cloudinary — done, see above
+- Retry/backoff worker for `integration_jobs` in `FAILED`/`RETRYING` status — **not built yet**, Day 4 Hr 6
 
 ## Environment Variables
 See `.env.example`. Never commit `.env` or paste real secrets into a prompt. Required:
@@ -167,7 +186,7 @@ Before building the related endpoint, confirm these with the user (full list in 
 8. ~~`INACTIVE` vs. `ARCHIVED`~~ — resolved 2026-07-24: `ARCHIVED` dropped, 2-state status only.
 9. ~~`idempotency_key` generation~~ — resolved 2026-07-24: frontend UUID v4, backend enforces via unique constraint.
 10. ~~ClickUp token encryption strategy~~ — resolved 2026-07-24: app-level `CLICKUP_TOKEN_ENCRYPTION_KEY`, server-env-only.
-11. Max file attachments per feedback submission — not yet specified, still open (raised 2026-07-24).
+11. ~~Max file attachments per feedback submission~~ — resolved 2026-07-25: 5. Enforced via DTO validation, no DB-level cap.
 
 ## Working Style
 - One hour-block from the roadmap = one focused session/prompt.

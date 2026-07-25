@@ -6,6 +6,7 @@ import { AuthModule } from './auth/auth.module';
 import { ClickupModule } from './clickup/clickup.module';
 import { ClientsModule } from './clients/clients.module';
 import { CloudinaryModule } from './cloudinary/cloudinary.module';
+import { FeedbackModule } from './feedback/feedback.module';
 import { HealthController } from './health/health.controller';
 import { PrismaModule } from './prisma/prisma.module';
 import { SitesModule } from './sites/sites.module';
@@ -23,6 +24,7 @@ import { SupabaseModule } from './supabase/supabase.module';
     ClientsModule,
     SitesModule,
     CloudinaryModule,
+    FeedbackModule,
   ],
   controllers: [AppController, HealthController],
   providers: [AppService],
