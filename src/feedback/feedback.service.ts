@@ -1,6 +1,15 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { ClickupService } from '../clickup/clickup.service';
 import { CloudinaryService } from '../cloudinary/cloudinary.service';
+import {
+  ALLOWED_IMAGE_FORMATS,
+  ALLOWED_VIDEO_FORMATS,
+  formatMb,
+  MAX_IMAGE_BYTES,
+  MAX_TOTAL_BYTES,
+  MAX_VIDEO_BYTES,
+  MAX_VIDEOS_PER_SUBMISSION,
+} from '../cloudinary/media-limits';
 import { IntegrationJobsService } from '../integration-jobs/integration-jobs.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateFeedbackDto } from './dto/create-feedback.dto';
@@ -44,16 +53,47 @@ export class FeedbackService {
     }
 
     const mediaCreates: FeedbackMediaCreateData[] = [];
+    const rejectionReasons: (string | null)[] = [];
+    let totalVerifiedBytes = 0;
+    let verifiedVideoCount = 0;
+
     for (const item of dto.media ?? []) {
       const resourceTypeLower = item.resourceType.toLowerCase() as 'image' | 'video';
-      const verified = await this.cloudinary.verifyResource(item.cloudinaryPublicId, resourceTypeLower);
+      // Trust nothing the client claimed about the file beyond its
+      // public_id - verifyResource() fetches the real format/bytes from
+      // Cloudinary itself, which is what every check below runs against.
+      const resource = await this.cloudinary.verifyResource(item.cloudinaryPublicId, resourceTypeLower);
+
+      let reason: string | null = null;
+      if (!resource) {
+        reason = 'Could not verify this file. Please try uploading it again.';
+      } else if (resourceTypeLower === 'image' && !ALLOWED_IMAGE_FORMATS.includes(resource.format)) {
+        reason = 'Unsupported photo format. Use JPEG, PNG, WebP, HEIC, or HEIF.';
+      } else if (resourceTypeLower === 'video' && !ALLOWED_VIDEO_FORMATS.includes(resource.format)) {
+        reason = 'Unsupported video format. Use MP4, MOV, or WebM.';
+      } else if (resourceTypeLower === 'image' && resource.bytes > MAX_IMAGE_BYTES) {
+        reason = `Photo is too large (max ${formatMb(MAX_IMAGE_BYTES)}).`;
+      } else if (resourceTypeLower === 'video' && resource.bytes > MAX_VIDEO_BYTES) {
+        reason = `Video is too large (max ${formatMb(MAX_VIDEO_BYTES)}).`;
+      } else if (resourceTypeLower === 'video' && verifiedVideoCount >= MAX_VIDEOS_PER_SUBMISSION) {
+        reason = 'Only one video can be attached per submission.';
+      } else if (totalVerifiedBytes + resource.bytes > MAX_TOTAL_BYTES) {
+        reason = `Attachments exceed the ${formatMb(MAX_TOTAL_BYTES)} total limit for this submission.`;
+      }
+
+      if (!reason && resource) {
+        totalVerifiedBytes += resource.bytes;
+        if (resourceTypeLower === 'video') verifiedVideoCount += 1;
+      }
+
+      rejectionReasons.push(reason);
       mediaCreates.push({
         cloudinaryPublicId: item.cloudinaryPublicId,
         resourceType: item.resourceType,
         originalFilename: item.originalFilename ?? null,
         mimeType: item.mimeType,
         sizeBytes: item.sizeBytes,
-        status: verified ? ('VERIFIED' as const) : ('REJECTED' as const),
+        status: reason ? ('REJECTED' as const) : ('VERIFIED' as const),
       });
     }
 
@@ -71,10 +111,21 @@ export class FeedbackService {
 
     await this.deliverToClickup(submission.id, submission.feedback, submission.mobileNumber, site);
 
-    return this.prisma.feedbackSubmission.findUniqueOrThrow({
+    const final = await this.prisma.feedbackSubmission.findUniqueOrThrow({
       where: { id: submission.id },
       include: { media: true },
     });
+
+    // rejectionReason is deliberately not a DB column (schema v1.5 only
+    // has PENDING/VERIFIED/REJECTED status) - it's attached here purely
+    // so the public form's immediate response can show a specific
+    // message instead of a silent drop. Prisma's nested create preserves
+    // input array order, so index-zipping against rejectionReasons is
+    // safe for this one response.
+    return {
+      ...final,
+      media: final.media.map((m, i) => ({ ...m, rejectionReason: rejectionReasons[i] ?? null })),
+    };
   }
 
   /**
