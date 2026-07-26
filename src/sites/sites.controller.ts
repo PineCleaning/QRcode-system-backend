@@ -41,6 +41,11 @@ export class SitesController {
     return this.sites.remove(id);
   }
 
+  @Get('sites/:id/feedback')
+  findFeedback(@Param('id') id: string) {
+    return this.sites.findFeedbackForSite(id);
+  }
+
   @Get('sites/:id/qr')
   async downloadQr(@Param('id') id: string, @Query() query: DownloadQrQueryDto, @Res() res: Response) {
     const site = await this.sites.findOneWithClient(id);

@@ -50,6 +50,11 @@ export class CloudinaryService {
     };
   }
 
+  /** Delivery URL is always derived from cloud_name + public_id, never stored (see feedback_media schema notes). */
+  buildDeliveryUrl(publicId: string, resourceType: 'image' | 'video'): string {
+    return cloudinary.url(publicId, { resource_type: resourceType, secure: true });
+  }
+
   /** Returns null if the resource doesn't exist (e.g. a spoofed/fabricated public_id) rather than throwing. */
   async verifyResource(publicId: string, resourceType: 'image' | 'video'): Promise<CloudinaryResourceInfo | null> {
     try {

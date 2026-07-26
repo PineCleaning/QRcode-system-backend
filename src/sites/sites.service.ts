@@ -1,5 +1,6 @@
 import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '../../generated/prisma/client';
+import { CloudinaryService } from '../cloudinary/cloudinary.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateSiteDto } from './dto/create-site.dto';
 import { UpdateSiteDto } from './dto/update-site.dto';
@@ -8,7 +9,10 @@ const MAX_CREATE_ATTEMPTS = 5;
 
 @Injectable()
 export class SitesService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly cloudinary: CloudinaryService,
+  ) {}
 
   async create(clientId: string, dto: CreateSiteDto) {
     const client = await this.prisma.client.findUnique({ where: { id: clientId } });
@@ -78,6 +82,29 @@ export class SitesService {
         ...(dto.status !== undefined && { status: dto.status }),
       },
     });
+  }
+
+  async findFeedbackForSite(id: string) {
+    await this.findOne(id); // 404s if missing
+
+    const submissions = await this.prisma.feedbackSubmission.findMany({
+      where: { siteId: id },
+      orderBy: { submittedAt: 'desc' },
+      include: { media: true },
+    });
+
+    // Delivery URL is derived from cloud_name + public_id at read time,
+    // never persisted (see feedback_media schema notes).
+    return submissions.map((submission) => ({
+      ...submission,
+      media: submission.media.map((item) => ({
+        ...item,
+        url:
+          item.status === 'VERIFIED'
+            ? this.cloudinary.buildDeliveryUrl(item.cloudinaryPublicId, item.resourceType.toLowerCase() as 'image' | 'video')
+            : null,
+      })),
+    }));
   }
 
   /** Hard delete. Blocked at the DB level (ON DELETE RESTRICT) if this site has feedback history. */
