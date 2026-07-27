@@ -1,13 +1,17 @@
+import { join } from 'node:path';
 import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as QRCode from 'qrcode';
 
-// pdfkit's real CJS export is the PDFDocument class itself (`export =`).
-// `import * as X` under esModuleInterop wraps it as { default: Class },
-// which breaks `new X(...)` at runtime even though it type-checks -
-// `import ... = require(...)` gets the raw, unwrapped export instead.
+// pdfkit's and sharp's real CJS exports are callable functions/classes
+// themselves (`export =`). `import * as X` under esModuleInterop wraps
+// that as { default: X }, which breaks calling it directly at runtime
+// even though it type-checks - `import ... = require(...)` gets the
+// raw, unwrapped export instead.
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import PDFDocument = require('pdfkit');
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import sharp = require('sharp');
 
 export type QrPageSize = 'A4' | 'A5';
 
@@ -16,6 +20,25 @@ export interface QrPrintInfo {
   siteName: string;
   clientName: string;
 }
+
+/**
+ * Branded "Scan Me" template (src/qr/assets/qr-template.png, 1410x2000)
+ * with a placeholder square where the real QR gets composited in.
+ * Measured directly from the source file's pixels (scanned for the
+ * white rounded-square region), not eyeballed - see the placeholder
+ * rect below.
+ *
+ * Resolved from process.cwd() (the project root), not __dirname:
+ * `nest start --watch` (dev) compiles to dist/src/qr/..., while
+ * `nest build` (prod) compiles to dist/qr/... - two different output
+ * layouts for the exact same source. A __dirname-relative path only
+ * matches one of them; process.cwd() is the project root either way
+ * (both `npm run start:dev` and `npm run start:prod` are invoked from
+ * there), so this asset can just live in src/ and never needs the
+ * nest-cli asset-copy step at all.
+ */
+const TEMPLATE_PATH = join(process.cwd(), 'src', 'qr', 'assets', 'qr-template.png');
+const QR_PLACEHOLDER = { left: 385, top: 1043, width: 638, height: 711 };
 
 /**
  * QR codes are generated on demand from the site's slug - nothing is
@@ -32,41 +55,56 @@ export class QrService {
     return `${baseDomain.replace(/\/+$/, '')}/${slug}`;
   }
 
-  async generatePng(slug: string): Promise<Buffer> {
+  /**
+   * Composites a real QR (encoding the site's URL) onto the branded
+   * template, sized/centered to sit inside the template's placeholder
+   * square without covering its corner-bracket frame or the "SCAN ME"
+   * tab beneath it.
+   */
+  private async compositeOntoTemplate(slug: string): Promise<Buffer> {
     const url = this.buildTargetUrl(slug);
-    return QRCode.toBuffer(url, {
+    const qrSize = Math.round(Math.min(QR_PLACEHOLDER.width, QR_PLACEHOLDER.height) * 0.85);
+
+    const qrBuffer = await QRCode.toBuffer(url, {
       type: 'png',
       errorCorrectionLevel: 'M',
-      margin: 2,
-      width: 1024,
+      margin: 1,
+      width: qrSize,
     });
+
+    const left = Math.round(QR_PLACEHOLDER.left + (QR_PLACEHOLDER.width - qrSize) / 2);
+    // Biased above center (not a plain vertical center) so the QR sits
+    // clear of the "SCAN ME" tab beneath the placeholder - the smaller
+    // 0.85 scale (was 0.92) alone left it sitting almost flush against
+    // the bottom edge.
+    const top = Math.round(QR_PLACEHOLDER.top + (QR_PLACEHOLDER.height - qrSize) / 2 - 30);
+
+    return sharp(TEMPLATE_PATH)
+      .composite([{ input: qrBuffer, left, top }])
+      .png()
+      .toBuffer();
   }
 
-  /** A4/A5-sized PDF: just the raw QR code plus a small identifying caption - card/sticker design is out of scope. */
+  async generatePng(slug: string): Promise<Buffer> {
+    return this.compositeOntoTemplate(slug);
+  }
+
+  /** Full-bleed A4/A5 PDF of the branded template with the real QR composited in. */
   async generatePdf(info: QrPrintInfo, size: QrPageSize): Promise<Buffer> {
-    const qrPng = await this.generatePng(info.slug);
+    const composited = await this.compositeOntoTemplate(info.slug);
 
     return new Promise((resolve, reject) => {
-      const doc = new PDFDocument({ size, margin: 36 });
+      const doc = new PDFDocument({ size, margin: 0 });
       const chunks: Buffer[] = [];
       doc.on('data', (chunk: Buffer) => chunks.push(chunk));
       doc.on('end', () => resolve(Buffer.concat(chunks)));
       doc.on('error', reject);
 
-      const qrSize = Math.min(doc.page.width, doc.page.height) * 0.5;
-      const x = (doc.page.width - qrSize) / 2;
-      const y = (doc.page.height - qrSize) / 2 - 30;
-
-      doc.image(qrPng, x, y, { width: qrSize, height: qrSize });
-
-      doc
-        .fontSize(14)
-        .text(info.clientName, 0, y + qrSize + 16, { align: 'center' })
-        .fontSize(11)
-        .text(info.siteName, { align: 'center' })
-        .fontSize(9)
-        .fillColor('#666666')
-        .text(info.slug, { align: 'center' });
+      doc.image(composited, 0, 0, {
+        fit: [doc.page.width, doc.page.height],
+        align: 'center',
+        valign: 'center',
+      });
 
       doc.end();
     });
