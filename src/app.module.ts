@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { ScheduleModule } from '@nestjs/schedule';
 import { AdminFeedbackModule } from './admin-feedback/admin-feedback.module';
+import { AdminMediaModule } from './admin-media/admin-media.module';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { AuthModule } from './auth/auth.module';
@@ -33,6 +34,7 @@ import { SupabaseModule } from './supabase/supabase.module';
     PublicModule,
     IntegrationJobsModule,
     AdminFeedbackModule,
+    AdminMediaModule,
   ],
   controllers: [AppController, HealthController],
   providers: [AppService],

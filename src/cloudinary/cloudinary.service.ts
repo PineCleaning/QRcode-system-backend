@@ -95,4 +95,9 @@ export class CloudinaryService {
       return null;
     }
   }
+
+  /** Permanently deletes the asset from Cloudinary storage (used by the admin Assets page). */
+  async destroy(publicId: string, resourceType: 'image' | 'video'): Promise<void> {
+    await cloudinary.uploader.destroy(publicId, { resource_type: resourceType });
+  }
 }
