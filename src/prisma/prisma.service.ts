@@ -5,7 +5,15 @@ import { PrismaClient } from '../../generated/prisma/client';
 @Injectable()
 export class PrismaService extends PrismaClient implements OnModuleInit, OnModuleDestroy {
   constructor() {
-    super({ adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL }) });
+    const databaseUrl = process.env.DATABASE_URL;
+    if (!databaseUrl) {
+      // Fail fast with a clear message, matching the getOrThrow() pattern
+      // used by every other service's required config (Supabase,
+      // Cloudinary, ClickUp) - without this, a missing DATABASE_URL
+      // surfaces as a confusing low-level pg connection error instead.
+      throw new Error('DATABASE_URL is required but was not set. Check your .env file.');
+    }
+    super({ adapter: new PrismaPg({ connectionString: databaseUrl }) });
   }
 
   async onModuleInit() {
