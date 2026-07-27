@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { ScheduleModule } from '@nestjs/schedule';
+import { AdminFeedbackModule } from './admin-feedback/admin-feedback.module';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { AuthModule } from './auth/auth.module';
@@ -31,6 +32,7 @@ import { SupabaseModule } from './supabase/supabase.module';
     FeedbackModule,
     PublicModule,
     IntegrationJobsModule,
+    AdminFeedbackModule,
   ],
   controllers: [AppController, HealthController],
   providers: [AppService],
