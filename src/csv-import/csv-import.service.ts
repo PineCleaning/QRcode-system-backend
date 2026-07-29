@@ -6,6 +6,7 @@ import { PrismaService } from '../prisma/prisma.service';
 
 const MAX_ROWS = 1000; // matches the discovery doc's stated CSV import cap (Section 5.2)
 const CLIENT_CODE_PATTERN = /^[a-z0-9]+(-[a-z0-9]+)*$/;
+const CONTACT_PHONE_PATTERN = /^[0-9+-]+$/;
 const MAX_CODE_GENERATION_ATTEMPTS = 5;
 const MAX_SITE_CODE_ATTEMPTS = 5;
 
@@ -136,6 +137,9 @@ export class CsvImportService {
   private async processRow(row: CsvRow): Promise<{ clientId: string; siteId: string }> {
     if (!row.clientName) throw new Error('Client Name is required');
     if (!row.siteName) throw new Error('Site Name is required');
+    if (row.contactPhone && !CONTACT_PHONE_PATTERN.test(row.contactPhone)) {
+      throw new Error(`Invalid Contact Phone "${row.contactPhone}" - only digits, + and - are allowed`);
+    }
 
     const client = await this.resolveClient(row);
     const site = await this.resolveSite(client, row);
