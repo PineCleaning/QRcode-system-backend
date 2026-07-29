@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { ConflictException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 
 /** Minutes to wait before each retry, indexed by (failed attempt number - 1). Last entry repeats if somehow exceeded. */
@@ -79,5 +79,34 @@ export class IntegrationJobsService {
         feedback: { include: { site: { include: { client: true } } } },
       },
     });
+  }
+
+  /**
+   * Manual retry (admin "Feedbacks" page): only meaningful for a
+   * permanently FAILED job - resets the attempt counter back to 0 and
+   * marks it due immediately, so the very next EVERY_MINUTE tick of
+   * RetryWorkerService picks it up and runs the exact same 5-attempt
+   * backoff cycle from the start. No changes needed to the worker
+   * itself - it already just looks for anything RETRYING and due.
+   */
+  async resetForRetry(feedbackId: string): Promise<void> {
+    const job = await this.prisma.integrationJob.findFirst({
+      where: { feedbackId, jobType: 'clickup_task_creation' },
+      orderBy: { createdAt: 'desc' },
+    });
+    if (!job) {
+      throw new NotFoundException(`No delivery job found for feedback ${feedbackId}`);
+    }
+    if (job.status !== 'FAILED') {
+      throw new ConflictException('Only a permanently failed delivery can be retried');
+    }
+
+    await this.prisma.$transaction([
+      this.prisma.integrationJob.update({
+        where: { id: job.id },
+        data: { status: 'RETRYING', attemptCount: 0, nextAttemptAt: new Date() },
+      }),
+      this.prisma.feedbackSubmission.update({ where: { id: feedbackId }, data: { status: 'DELIVERY_PENDING' } }),
+    ]);
   }
 }

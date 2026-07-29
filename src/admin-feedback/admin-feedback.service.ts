@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { CloudinaryService } from '../cloudinary/cloudinary.service';
+import { IntegrationJobsService } from '../integration-jobs/integration-jobs.service';
 import { PrismaService } from '../prisma/prisma.service';
 
 /**
@@ -16,6 +17,7 @@ export class AdminFeedbackService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly cloudinary: CloudinaryService,
+    private readonly integrationJobs: IntegrationJobsService,
   ) {}
 
   async findAll(clientId?: string, siteId?: string) {
@@ -50,5 +52,10 @@ export class AdminFeedbackService {
             : null,
       })),
     }));
+  }
+
+  /** Manually re-triggers delivery for a permanently FAILED submission (resets the 5-attempt cycle). */
+  async retry(feedbackId: string): Promise<void> {
+    await this.integrationJobs.resetForRetry(feedbackId);
   }
 }
