@@ -47,11 +47,19 @@ export class SitesService {
   }
 
   async findAllForClient(clientId: string) {
-    const client = await this.prisma.client.findUnique({ where: { id: clientId } });
+    // Client-existence check and the sites list are independent queries -
+    // running them in parallel instead of sequentially halves the fixed
+    // network round-trip cost to the DB (each round trip to this project's
+    // Supabase pooler is ~200-300ms from a dev machine; two sequential
+    // round trips was ~450-500ms of pure wait for what should be one).
+    const [client, sites] = await Promise.all([
+      this.prisma.client.findUnique({ where: { id: clientId } }),
+      this.prisma.site.findMany({ where: { clientId }, orderBy: { siteCode: 'asc' } }),
+    ]);
     if (!client) {
       throw new NotFoundException(`Client ${clientId} not found`);
     }
-    return this.prisma.site.findMany({ where: { clientId }, orderBy: { siteCode: 'asc' } });
+    return sites;
   }
 
   async findOne(id: string) {
