@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { ClickupApiClient } from './clickup-api.client';
 import { ClickupConnectionService } from './clickup-connection.service';
@@ -36,6 +36,7 @@ export interface TicketInput {
  */
 @Injectable()
 export class ClickupService {
+  private readonly logger = new Logger(ClickupService.name);
   private readonly activeStatusName: string;
   private readonly inactiveStatusName: string;
 
@@ -72,25 +73,38 @@ export class ClickupService {
    * has no structured ClickUp counterpart (see Structure Mapping) so
    * it's folded into the title/description as plain text, not a field.
    *
-   * ⚠️ Unverified against a live ClickUp connection (no real credentials
-   * exist yet, same caveat as Company sync). The Relationship field
-   * value shape ({ add: [...] }) is based on ClickUp's documented
-   * format for relationship-type custom fields, not empirically
-   * confirmed - budget time to debug this specific payload once real
-   * ClickUp access exists.
+   * Task creation itself must succeed or throw (retries are safe here -
+   * nothing was created yet). Linking the ticket to its Company via the
+   * Relationship field is a separate, best-effort step done AFTER the
+   * task exists: ClickUp's bulk `custom_fields` array on task creation
+   * doesn't reliably support Relationship-type fields (that's what the
+   * dedicated setCustomFieldValue()/PUT-field endpoint is for), and
+   * more importantly - since a retry re-runs this whole function from
+   * scratch with no memory of a prior partial success, letting the
+   * field-set step throw here would create a DUPLICATE ticket on the
+   * next retry attempt rather than just a ticket missing its Company
+   * link. A missing link is a much smaller problem than a duplicate.
    */
   async createTicket(input: TicketInput): Promise<string> {
     const { connection, accessToken } = await this.connections.getReadyConnection();
 
-    const customFields = input.clientEntityId
-      ? [{ id: connection.clientFieldId!, value: { add: [input.clientEntityId] } }]
-      : [];
-
     const task = await this.api.createTask(accessToken, connection.ticketsListId!, {
       name: `${input.clientName} — ${input.siteName}`,
       description: this.buildTicketDescription(input),
-      custom_fields: customFields,
     });
+
+    if (input.clientEntityId) {
+      try {
+        await this.api.setCustomFieldValue(accessToken, task.id, connection.clientFieldId!, {
+          add: [input.clientEntityId],
+        });
+      } catch (err) {
+        this.logger.warn(
+          `Ticket ${task.id} created but failed to link Company ${input.clientEntityId} via the CLIENT NAME field: ${err instanceof Error ? err.message : err}`,
+        );
+      }
+    }
+
     return task.id;
   }
 
