@@ -36,7 +36,10 @@ export class ClientsService {
     }
 
     await this.syncToClickup(client.id, client);
-    return this.findOne(client.id);
+    // A brand-new client always has 0 sites - attach that directly
+    // instead of a second DB round-trip (findOne) just to compute a
+    // count that can only ever be zero here.
+    return { ...client, _count: { sites: 0 } };
   }
 
   async findAll() {
