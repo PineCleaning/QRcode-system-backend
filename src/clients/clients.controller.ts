@@ -1,9 +1,10 @@
-import { Body, Controller, Delete, Get, HttpCode, Param, Post, Put, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, HttpCode, Param, Post, Put, Query, UseGuards } from '@nestjs/common';
 import type { AdminUser } from '../../generated/prisma/client';
 import { CurrentAdmin } from '../auth/current-admin.decorator';
 import { SupabaseAuthGuard } from '../auth/supabase-auth.guard';
 import { ClientsService } from './clients.service';
 import { CreateClientDto } from './dto/create-client.dto';
+import { FindAllClientsQueryDto } from './dto/find-all-clients-query.dto';
 import { UpdateClientDto } from './dto/update-client.dto';
 
 @Controller('clients')
@@ -17,8 +18,8 @@ export class ClientsController {
   }
 
   @Get()
-  findAll() {
-    return this.clients.findAll();
+  findAll(@Query() query: FindAllClientsQueryDto) {
+    return this.clients.findAll(query.page, query.pageSize);
   }
 
   @Get(':id')

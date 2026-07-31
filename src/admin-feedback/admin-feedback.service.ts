@@ -20,29 +20,18 @@ export class AdminFeedbackService {
     private readonly integrationJobs: IntegrationJobsService,
   ) {}
 
-  async findAll(clientId?: string, siteId?: string) {
-    const submissions = await this.prisma.feedbackSubmission.findMany({
-      where: {
-        ...(siteId && { siteId }),
-        ...(clientId && { site: { clientId } }),
-      },
-      orderBy: { submittedAt: 'desc' },
-      include: {
-        media: true,
-        site: {
-          select: {
-            id: true,
-            siteName: true,
-            slug: true,
-            client: { select: { id: true, name: true, clientCode: true } },
-          },
-        },
-      },
-    });
+  /**
+   * No page/pageSize -> unchanged full-array response. Either param
+   * present -> paginated { data, total, page, pageSize } shape instead,
+   * matching ClientsService.findAll's pattern.
+   */
+  async findAll(clientId?: string, siteId?: string, page?: number, pageSize?: number) {
+    const where = {
+      ...(siteId && { siteId }),
+      ...(clientId && { site: { clientId } }),
+    };
 
-    // Delivery URL is derived from cloud_name + public_id at read time,
-    // never persisted - same pattern as SitesService.findFeedbackForSite.
-    return submissions.map((submission) => ({
+    const withMediaUrls = <T extends { media: { status: string; cloudinaryPublicId: string; resourceType: string }[] }>(submission: T) => ({
       ...submission,
       media: submission.media.map((item) => ({
         ...item,
@@ -51,7 +40,46 @@ export class AdminFeedbackService {
             ? this.cloudinary.buildDeliveryUrl(item.cloudinaryPublicId, item.resourceType.toLowerCase() as 'image' | 'video')
             : null,
       })),
-    }));
+    });
+
+    const include = {
+      media: true,
+      site: {
+        select: {
+          id: true,
+          siteName: true,
+          slug: true,
+          client: { select: { id: true, name: true, clientCode: true } },
+        },
+      },
+    } as const;
+
+    if (!page && !pageSize) {
+      const submissions = await this.prisma.feedbackSubmission.findMany({
+        where,
+        orderBy: { submittedAt: 'desc' },
+        include,
+      });
+      // Delivery URL is derived from cloud_name + public_id at read time,
+      // never persisted - same pattern as SitesService.findFeedbackForSite.
+      return submissions.map(withMediaUrls);
+    }
+
+    const currentPage = page ?? 1;
+    const size = pageSize ?? 50;
+
+    const [submissions, total] = await Promise.all([
+      this.prisma.feedbackSubmission.findMany({
+        where,
+        orderBy: { submittedAt: 'desc' },
+        include,
+        skip: (currentPage - 1) * size,
+        take: size,
+      }),
+      this.prisma.feedbackSubmission.count({ where }),
+    ]);
+
+    return { data: submissions.map(withMediaUrls), total, page: currentPage, pageSize: size };
   }
 
   /** Manually re-triggers delivery for a permanently FAILED submission (resets the 5-attempt cycle). */
