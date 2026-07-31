@@ -4,6 +4,7 @@ import { SupabaseAuthGuard } from '../auth/supabase-auth.guard';
 import { QrService } from '../qr/qr.service';
 import { DownloadQrQueryDto } from './dto/download-qr-query.dto';
 import { CreateSiteDto } from './dto/create-site.dto';
+import { FindAllSitesQueryDto } from './dto/find-all-sites-query.dto';
 import { UpdateSiteDto } from './dto/update-site.dto';
 import { SitesService } from './sites.service';
 
@@ -21,8 +22,8 @@ export class SitesController {
   }
 
   @Get('clients/:clientId/sites')
-  findAllForClient(@Param('clientId') clientId: string) {
-    return this.sites.findAllForClient(clientId);
+  findAllForClient(@Param('clientId') clientId: string, @Query() query: FindAllSitesQueryDto) {
+    return this.sites.findAllForClient(clientId, query.page, query.pageSize);
   }
 
   @Get('sites/:id')

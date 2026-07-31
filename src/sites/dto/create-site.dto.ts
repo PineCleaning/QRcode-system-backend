@@ -1,4 +1,4 @@
-import { IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
+import { IsString, MaxLength, MinLength } from 'class-validator';
 
 /** No siteCode/slug here - both are system-generated (see SitesService.create). */
 export class CreateSiteDto {
@@ -8,7 +8,7 @@ export class CreateSiteDto {
   siteName!: string;
 
   @IsString()
+  @MinLength(1)
   @MaxLength(300)
-  @IsOptional()
-  address?: string;
+  address!: string;
 }

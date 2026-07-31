@@ -52,7 +52,7 @@ export class QrService {
 
   buildTargetUrl(slug: string): string {
     const baseDomain = this.config.get<string>('BASE_DOMAIN') || 'http://localhost:3000';
-    return `${baseDomain.replace(/\/+$/, '')}/${slug}`;
+    return `${baseDomain.replace(/\/+$/, '')}/qr/feedback/${slug}`;
   }
 
   /**

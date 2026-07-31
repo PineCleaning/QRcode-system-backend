@@ -46,20 +46,46 @@ export class SitesService {
     throw lastError;
   }
 
-  async findAllForClient(clientId: string) {
-    // Client-existence check and the sites list are independent queries -
-    // running them in parallel instead of sequentially halves the fixed
-    // network round-trip cost to the DB (each round trip to this project's
-    // Supabase pooler is ~200-300ms from a dev machine; two sequential
-    // round trips was ~450-500ms of pure wait for what should be one).
-    const [client, sites] = await Promise.all([
+  /**
+   * No page/pageSize -> unchanged full-array response (the Feedback/Assets
+   * site filter dropdown relies on this shape and never sends these
+   * params). Either param present -> paginated { data, total, page,
+   * pageSize } shape instead, matching ClientsService.findAll's pattern.
+   */
+  async findAllForClient(clientId: string, page?: number, pageSize?: number) {
+    if (!page && !pageSize) {
+      // Client-existence check and the sites list are independent queries -
+      // running them in parallel instead of sequentially halves the fixed
+      // network round-trip cost to the DB (each round trip to this project's
+      // Supabase pooler is ~200-300ms from a dev machine; two sequential
+      // round trips was ~450-500ms of pure wait for what should be one).
+      const [client, sites] = await Promise.all([
+        this.prisma.client.findUnique({ where: { id: clientId } }),
+        this.prisma.site.findMany({ where: { clientId }, orderBy: { siteCode: 'asc' } }),
+      ]);
+      if (!client) {
+        throw new NotFoundException(`Client ${clientId} not found`);
+      }
+      return sites;
+    }
+
+    const currentPage = page ?? 1;
+    const size = pageSize ?? 50;
+
+    const [client, sites, total] = await Promise.all([
       this.prisma.client.findUnique({ where: { id: clientId } }),
-      this.prisma.site.findMany({ where: { clientId }, orderBy: { siteCode: 'asc' } }),
+      this.prisma.site.findMany({
+        where: { clientId },
+        orderBy: { siteCode: 'asc' },
+        skip: (currentPage - 1) * size,
+        take: size,
+      }),
+      this.prisma.site.count({ where: { clientId } }),
     ]);
     if (!client) {
       throw new NotFoundException(`Client ${clientId} not found`);
     }
-    return sites;
+    return { data: sites, total, page: currentPage, pageSize: size };
   }
 
   async findOne(id: string) {

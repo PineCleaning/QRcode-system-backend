@@ -137,6 +137,7 @@ export class CsvImportService {
   private async processRow(row: CsvRow): Promise<{ clientId: string; siteId: string }> {
     if (!row.clientName) throw new Error('Client Name is required');
     if (!row.siteName) throw new Error('Site Name is required');
+    if (!row.address) throw new Error('Address is required');
     if (row.contactPhone && !CONTACT_PHONE_PATTERN.test(row.contactPhone)) {
       throw new Error(`Invalid Contact Phone "${row.contactPhone}" - only digits, + and - are allowed`);
     }

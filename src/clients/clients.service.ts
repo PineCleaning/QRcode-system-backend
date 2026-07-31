@@ -42,11 +42,52 @@ export class ClientsService {
     return { ...client, _count: { sites: 0 } };
   }
 
-  async findAll() {
-    return this.prisma.client.findMany({
-      orderBy: { createdAt: 'desc' },
-      include: { _count: { select: { sites: true } } },
-    });
+  /**
+   * No page/pageSize -> unchanged full-array response (Feedback/Assets
+   * filter dropdowns and the CSV import preview all rely on this shape
+   * and never send these params). Either param present -> paginated
+   * { data, total, page, pageSize, ...counts } shape instead, with the
+   * summary counts computed across *all* clients (not just the current
+   * page) via separate lightweight aggregate queries.
+   */
+  async findAll(page?: number, pageSize?: number) {
+    if (!page && !pageSize) {
+      return this.prisma.client.findMany({
+        orderBy: { createdAt: 'desc' },
+        include: { _count: { select: { sites: true } } },
+      });
+    }
+
+    const currentPage = page ?? 1;
+    const size = pageSize ?? 50;
+
+    const [data, total, activeCount, totalSites, multiSiteGroups] = await Promise.all([
+      this.prisma.client.findMany({
+        orderBy: { createdAt: 'desc' },
+        include: { _count: { select: { sites: true } } },
+        skip: (currentPage - 1) * size,
+        take: size,
+      }),
+      this.prisma.client.count(),
+      this.prisma.client.count({ where: { status: 'ACTIVE' } }),
+      this.prisma.site.count(),
+      this.prisma.site.groupBy({
+        by: ['clientId'],
+        _count: { clientId: true },
+        having: { clientId: { _count: { gt: 1 } } },
+      }),
+    ]);
+
+    return {
+      data,
+      total,
+      page: currentPage,
+      pageSize: size,
+      activeCount,
+      inactiveCount: total - activeCount,
+      totalSites,
+      multiSiteCount: multiSiteGroups.length,
+    };
   }
 
   async findOne(id: string) {
