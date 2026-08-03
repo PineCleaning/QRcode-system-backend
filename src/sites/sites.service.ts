@@ -2,6 +2,7 @@ import { ConflictException, Injectable, NotFoundException } from '@nestjs/common
 import { Prisma } from '../../generated/prisma/client';
 import { CloudinaryService } from '../cloudinary/cloudinary.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { QrService } from '../qr/qr.service';
 import { CreateSiteDto } from './dto/create-site.dto';
 import { UpdateSiteDto } from './dto/update-site.dto';
 
@@ -12,7 +13,19 @@ export class SitesService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly cloudinary: CloudinaryService,
+    private readonly qr: QrService,
   ) {}
+
+  /**
+   * Same URL QrService.buildTargetUrl bakes into every generated QR
+   * image - computed from BASE_DOMAIN server-side rather than left for
+   * the frontend to guess from window.location.origin, which would be
+   * wrong whenever the admin portal and public form aren't on the same
+   * host.
+   */
+  private withFeedbackUrl<T extends { slug: string }>(site: T): T & { feedbackUrl: string } {
+    return { ...site, feedbackUrl: this.qr.buildTargetUrl(site.slug) };
+  }
 
   async create(clientId: string, dto: CreateSiteDto) {
     const client = await this.prisma.client.findUnique({ where: { id: clientId } });
@@ -25,7 +38,7 @@ export class SitesService {
       const siteCode = await this.nextSiteCode(clientId);
       const slug = `${client.clientCode}-${siteCode}`;
       try {
-        return await this.prisma.site.create({
+        const site = await this.prisma.site.create({
           data: {
             clientId,
             siteCode,
@@ -34,6 +47,7 @@ export class SitesService {
             address: dto.address ?? null,
           },
         });
+        return this.withFeedbackUrl(site);
       } catch (err) {
         lastError = err;
         // Concurrent create picked the same siteCode/slug - recompute and retry.
@@ -66,7 +80,7 @@ export class SitesService {
       if (!client) {
         throw new NotFoundException(`Client ${clientId} not found`);
       }
-      return sites;
+      return sites.map((site) => this.withFeedbackUrl(site));
     }
 
     const currentPage = page ?? 1;
@@ -85,7 +99,7 @@ export class SitesService {
     if (!client) {
       throw new NotFoundException(`Client ${clientId} not found`);
     }
-    return { data: sites, total, page: currentPage, pageSize: size };
+    return { data: sites.map((site) => this.withFeedbackUrl(site)), total, page: currentPage, pageSize: size };
   }
 
   async findOne(id: string) {
@@ -93,7 +107,7 @@ export class SitesService {
     if (!site) {
       throw new NotFoundException(`Site ${id} not found`);
     }
-    return site;
+    return this.withFeedbackUrl(site);
   }
 
   /** Used for the QR PDF caption, which shows client name alongside the site. */
@@ -102,13 +116,13 @@ export class SitesService {
     if (!site) {
       throw new NotFoundException(`Site ${id} not found`);
     }
-    return site;
+    return this.withFeedbackUrl(site);
   }
 
   async update(id: string, dto: UpdateSiteDto) {
     await this.findOne(id); // 404s if missing
 
-    return this.prisma.site.update({
+    const site = await this.prisma.site.update({
       where: { id },
       data: {
         ...(dto.siteName !== undefined && { siteName: dto.siteName.trim() }),
@@ -116,6 +130,7 @@ export class SitesService {
         ...(dto.status !== undefined && { status: dto.status }),
       },
     });
+    return this.withFeedbackUrl(site);
   }
 
   async findFeedbackForSite(id: string) {
