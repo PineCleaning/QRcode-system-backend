@@ -15,7 +15,7 @@ export interface TicketInput {
   clientName: string;
   /** clients.clickup_entity_id of the client this feedback belongs to - null if that client was never synced to ClickUp. */
   clientEntityId: string | null;
-  siteName: string;
+  businessName: string;
   feedback: string;
   mobileNumber: string | null;
 }
@@ -89,7 +89,7 @@ export class ClickupService {
     const { connection, accessToken } = await this.connections.getReadyConnection();
 
     const task = await this.api.createTask(accessToken, connection.ticketsListId!, {
-      name: `${input.clientName} — ${input.siteName}`,
+      name: `${input.clientName} — ${input.businessName}`,
       description: this.buildTicketDescription(input),
     });
 
@@ -109,7 +109,7 @@ export class ClickupService {
   }
 
   private buildTicketDescription(input: TicketInput): string {
-    const lines = [`Site: ${input.siteName}`, '', input.feedback];
+    const lines = [`Business Name: ${input.businessName}`, '', input.feedback];
     if (input.mobileNumber) lines.push('', `Mobile: ${input.mobileNumber}`);
     return lines.join('\n');
   }

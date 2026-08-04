@@ -15,13 +15,13 @@ export class ClientsService {
   ) {}
 
   async create(dto: CreateClientDto, createdBy: string) {
-    const clientCode = dto.clientCode.trim().toLowerCase();
+    const clientId = dto.clientId.trim().toLowerCase();
 
     let client;
     try {
       client = await this.prisma.client.create({
         data: {
-          clientCode,
+          clientId,
           name: dto.name.trim(),
           contactEmail: dto.contactEmail ?? null,
           contactPhone: dto.contactPhone ?? null,
@@ -30,7 +30,7 @@ export class ClientsService {
       });
     } catch (err) {
       if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
-        throw new ConflictException(`A client with clientCode "${clientCode}" already exists`);
+        throw new ConflictException(`A client with clientId "${clientId}" already exists`);
       }
       throw err;
     }
@@ -72,9 +72,9 @@ export class ClientsService {
       this.prisma.client.count({ where: { status: 'ACTIVE' } }),
       this.prisma.site.count(),
       this.prisma.site.groupBy({
-        by: ['clientId'],
-        _count: { clientId: true },
-        having: { clientId: { _count: { gt: 1 } } },
+        by: ['clientCode'],
+        _count: { clientCode: true },
+        having: { clientCode: { _count: { gt: 1 } } },
       }),
     ]);
 
@@ -139,7 +139,7 @@ export class ClientsService {
    * client CRUD operation. Every update re-attempts the sync, so a
    * previously-failed create sync self-heals on the next edit.
    */
-  private async syncToClickup(clientId: string, client: { clickupEntityId: string | null; name: string; contactEmail: string | null; contactPhone: string | null; status: string }) {
+  private async syncToClickup(clientCode: string, client: { clickupEntityId: string | null; name: string; contactEmail: string | null; contactPhone: string | null; status: string }) {
     const input = {
       name: client.name,
       contactEmail: client.contactEmail,
@@ -152,10 +152,10 @@ export class ClientsService {
         await this.clickup.updateCompany(client.clickupEntityId, input);
       } else {
         const clickupTaskId = await this.clickup.createCompany(input);
-        await this.prisma.client.update({ where: { id: clientId }, data: { clickupEntityId: clickupTaskId } });
+        await this.prisma.client.update({ where: { id: clientCode }, data: { clickupEntityId: clickupTaskId } });
       }
     } catch (err) {
-      this.logger.warn(`ClickUp sync failed for client ${clientId}: ${err instanceof Error ? err.message : err}`);
+      this.logger.warn(`ClickUp sync failed for client ${clientCode}: ${err instanceof Error ? err.message : err}`);
     }
   }
 }

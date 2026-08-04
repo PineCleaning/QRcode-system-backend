@@ -39,7 +39,7 @@ export class RetryWorkerService {
         const clickupTaskId = await this.clickup.createTicket({
           clientName: job.feedback.site.client.name,
           clientEntityId: job.feedback.site.client.clickupEntityId,
-          siteName: job.feedback.site.siteName,
+          businessName: job.feedback.site.businessName,
           feedback: job.feedback.feedback,
           mobileNumber: job.feedback.mobileNumber,
         });

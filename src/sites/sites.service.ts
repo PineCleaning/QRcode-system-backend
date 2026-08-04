@@ -1,4 +1,5 @@
 import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import { randomUUID } from 'node:crypto';
 import { Prisma } from '../../generated/prisma/client';
 import { CloudinaryService } from '../cloudinary/cloudinary.service';
 import { PrismaService } from '../prisma/prisma.service';
@@ -27,23 +28,28 @@ export class SitesService {
     return { ...site, feedbackUrl: this.qr.buildTargetUrl(site.slug) };
   }
 
-  async create(clientId: string, dto: CreateSiteDto) {
-    const client = await this.prisma.client.findUnique({ where: { id: clientId } });
+  async create(clientCode: string, dto: CreateSiteDto) {
+    const client = await this.prisma.client.findUnique({ where: { id: clientCode } });
     if (!client) {
-      throw new NotFoundException(`Client ${clientId} not found`);
+      throw new NotFoundException(`Client ${clientCode} not found`);
     }
 
     let lastError: unknown;
     for (let attempt = 0; attempt < MAX_CREATE_ATTEMPTS; attempt++) {
-      const siteCode = await this.nextSiteCode(clientId);
-      const slug = `${client.clientCode}-${siteCode}`;
+      const siteCode = await this.nextSiteCode(clientCode);
+      // Deliberately not derived from clientId/siteCode - a public QR
+      // slug must not be guessable/enumerable from a business's other
+      // known slugs. clientId/siteCode stay human-readable for the
+      // admin portal only; this is the one thing that's actually
+      // exposed on the printed QR code and public URL.
+      const slug = randomUUID();
       try {
         const site = await this.prisma.site.create({
           data: {
-            clientId,
+            clientCode,
             siteCode,
             slug,
-            siteName: dto.siteName.trim(),
+            businessName: dto.businessName.trim(),
             address: dto.address ?? null,
           },
         });
@@ -66,7 +72,7 @@ export class SitesService {
    * params). Either param present -> paginated { data, total, page,
    * pageSize } shape instead, matching ClientsService.findAll's pattern.
    */
-  async findAllForClient(clientId: string, page?: number, pageSize?: number) {
+  async findAllForClient(clientCode: string, page?: number, pageSize?: number) {
     if (!page && !pageSize) {
       // Client-existence check and the sites list are independent queries -
       // running them in parallel instead of sequentially halves the fixed
@@ -74,11 +80,11 @@ export class SitesService {
       // Supabase pooler is ~200-300ms from a dev machine; two sequential
       // round trips was ~450-500ms of pure wait for what should be one).
       const [client, sites] = await Promise.all([
-        this.prisma.client.findUnique({ where: { id: clientId } }),
-        this.prisma.site.findMany({ where: { clientId }, orderBy: { siteCode: 'asc' } }),
+        this.prisma.client.findUnique({ where: { id: clientCode } }),
+        this.prisma.site.findMany({ where: { clientCode }, orderBy: { siteCode: 'asc' } }),
       ]);
       if (!client) {
-        throw new NotFoundException(`Client ${clientId} not found`);
+        throw new NotFoundException(`Client ${clientCode} not found`);
       }
       return sites.map((site) => this.withFeedbackUrl(site));
     }
@@ -87,17 +93,17 @@ export class SitesService {
     const size = pageSize ?? 50;
 
     const [client, sites, total] = await Promise.all([
-      this.prisma.client.findUnique({ where: { id: clientId } }),
+      this.prisma.client.findUnique({ where: { id: clientCode } }),
       this.prisma.site.findMany({
-        where: { clientId },
+        where: { clientCode },
         orderBy: { siteCode: 'asc' },
         skip: (currentPage - 1) * size,
         take: size,
       }),
-      this.prisma.site.count({ where: { clientId } }),
+      this.prisma.site.count({ where: { clientCode } }),
     ]);
     if (!client) {
-      throw new NotFoundException(`Client ${clientId} not found`);
+      throw new NotFoundException(`Client ${clientCode} not found`);
     }
     return { data: sites.map((site) => this.withFeedbackUrl(site)), total, page: currentPage, pageSize: size };
   }
@@ -125,7 +131,7 @@ export class SitesService {
     const site = await this.prisma.site.update({
       where: { id },
       data: {
-        ...(dto.siteName !== undefined && { siteName: dto.siteName.trim() }),
+        ...(dto.businessName !== undefined && { businessName: dto.businessName.trim() }),
         ...(dto.address !== undefined && { address: dto.address }),
         ...(dto.status !== undefined && { status: dto.status }),
       },
@@ -173,8 +179,8 @@ export class SitesService {
   }
 
   /** Next sequential site_code for a client, zero-padded to at least 2 digits (e.g. "01", "02", ... "100"). */
-  private async nextSiteCode(clientId: string): Promise<string> {
-    const existing = await this.prisma.site.findMany({ where: { clientId }, select: { siteCode: true } });
+  private async nextSiteCode(clientCode: string): Promise<string> {
+    const existing = await this.prisma.site.findMany({ where: { clientCode }, select: { siteCode: true } });
     const maxNum = existing.reduce((max, s) => Math.max(max, Number.parseInt(s.siteCode, 10) || 0), 0);
     return String(maxNum + 1).padStart(2, '0');
   }

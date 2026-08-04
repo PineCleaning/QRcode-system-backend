@@ -149,7 +149,7 @@ model ClickupConnection {
 /// One row per client company of the cleaning business.
 model Client {
   id              String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  clientCode      String           @unique @map("client_code")
+  clientId        String           @unique @map("client_id")
   name            String
   contactEmail    String?          @map("contact_email")
   contactPhone    String?          @map("contact_phone")
@@ -173,11 +173,11 @@ model Client {
 /// layer, not as a DB constraint).
 model Site {
   id              String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  clientId        String           @map("client_id") @db.Uuid
-  client          Client           @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  clientCode      String           @map("client_code") @db.Uuid
+  client          Client           @relation(fields: [clientCode], references: [id], onDelete: Cascade)
   siteCode        String           @map("site_code")
   slug            String           @unique
-  siteName        String           @map("site_name")
+  businessName    String           @map("business_name")
   address         String?
   status          ClientSiteStatus @default(ACTIVE)
   clickupEntityId String?          @map("clickup_entity_id")
@@ -187,7 +187,7 @@ model Site {
   feedbackSubmissions FeedbackSubmission[]
   csvImportRows       CsvImportRow[]
 
-  @@unique([clientId, siteCode], map: "uq_client_site_code")
+  @@unique([clientCode, siteCode], map: "uq_client_site_code")
   @@index([status])
   @@index([slug])
   @@map("sites")
@@ -221,16 +221,16 @@ model FeedbackSubmission {
 /// Photos/videos attached to a feedback submission. No stored URL —
 /// derive it from cloudinaryPublicId + resourceType at read time.
 model FeedbackMedia {
-  id                 String              @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  feedbackId         String              @map("feedback_id") @db.Uuid
-  feedback           FeedbackSubmission  @relation(fields: [feedbackId], references: [id], onDelete: Cascade)
-  cloudinaryPublicId String              @unique @map("cloudinary_public_id")
-  resourceType       MediaResourceType   @map("resource_type")
-  originalFilename   String?             @map("original_filename")
-  mimeType           String              @map("mime_type")
-  sizeBytes          Int                 @map("size_bytes")
-  status             MediaStatus         @default(PENDING)
-  createdAt          DateTime            @default(now()) @map("created_at")
+  id                 String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  feedbackId         String             @map("feedback_id") @db.Uuid
+  feedback           FeedbackSubmission @relation(fields: [feedbackId], references: [id], onDelete: Cascade)
+  cloudinaryPublicId String             @unique @map("cloudinary_public_id")
+  resourceType       MediaResourceType  @map("resource_type")
+  originalFilename   String?            @map("original_filename")
+  mimeType           String             @map("mime_type")
+  sizeBytes          Int                @map("size_bytes")
+  status             MediaStatus        @default(PENDING)
+  createdAt          DateTime           @default(now()) @map("created_at")
 
   @@index([feedbackId])
   @@map("feedback_media")
@@ -255,15 +255,15 @@ model CsvImportBatch {
   @@map("csv_import_batches")
 }
 
-/// One row per line in a CSV upload, with per-row result. client_id
+/// One row per line in a CSV upload, with per-row result. client_code
 /// and site_id are nullable: a failed row never created one.
 model CsvImportRow {
   id           String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   batchId      String         @map("batch_id") @db.Uuid
   batch        CsvImportBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
   rowNumber    Int            @map("row_number")
-  clientId     String?        @map("client_id") @db.Uuid
-  client       Client?        @relation(fields: [clientId], references: [id], onDelete: SetNull)
+  clientCode   String?        @map("client_code") @db.Uuid
+  client       Client?        @relation(fields: [clientCode], references: [id], onDelete: SetNull)
   siteId       String?        @map("site_id") @db.Uuid
   site         Site?          @relation(fields: [siteId], references: [id], onDelete: SetNull)
   status       CsvRowStatus

@@ -5,8 +5,8 @@ import { PrismaService } from '../prisma/prisma.service';
 
 /**
  * Global feedback list for the admin "Feedbacks" page - every submission
- * across every client/site, optionally narrowed by clientId/siteId. A
- * validly-formatted but nonexistent clientId/siteId just yields zero
+ * across every client/site, optionally narrowed by clientCode/siteId. A
+ * validly-formatted but nonexistent clientCode/siteId just yields zero
  * matching rows (200 []), not a 404 - the real UI only ever sends ids
  * sourced from GET /clients / GET /clients/:id/sites, so there's no
  * legitimate path to a "does this id exist" question here, and no code
@@ -25,10 +25,10 @@ export class AdminFeedbackService {
    * present -> paginated { data, total, page, pageSize } shape instead,
    * matching ClientsService.findAll's pattern.
    */
-  async findAll(clientId?: string, siteId?: string, page?: number, pageSize?: number) {
+  async findAll(clientCode?: string, siteId?: string, page?: number, pageSize?: number) {
     const where = {
       ...(siteId && { siteId }),
-      ...(clientId && { site: { clientId } }),
+      ...(clientCode && { site: { clientCode } }),
     };
 
     const withMediaUrls = <T extends { media: { status: string; cloudinaryPublicId: string; resourceType: string }[] }>(submission: T) => ({
@@ -47,9 +47,9 @@ export class AdminFeedbackService {
       site: {
         select: {
           id: true,
-          siteName: true,
+          businessName: true,
           slug: true,
-          client: { select: { id: true, name: true, clientCode: true } },
+          client: { select: { id: true, name: true, clientId: true } },
         },
       },
     } as const;

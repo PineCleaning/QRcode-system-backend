@@ -10,7 +10,7 @@ export class AdminFeedbackController {
 
   @Get()
   findAll(@Query() query: FindAllFeedbackQueryDto) {
-    return this.service.findAll(query.clientId, query.siteId, query.page, query.pageSize);
+    return this.service.findAll(query.clientCode, query.siteId, query.page, query.pageSize);
   }
 
   @Post(':id/retry')

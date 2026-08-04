@@ -139,7 +139,7 @@ export class FeedbackService {
     feedbackId: string,
     feedback: string,
     mobileNumber: string | null,
-    site: { siteName: string; client: { name: string; clickupEntityId: string | null } },
+    site: { businessName: string; client: { name: string; clickupEntityId: string | null } },
   ) {
     const job = await this.integrationJobs.createInitialJob(feedbackId);
 
@@ -147,7 +147,7 @@ export class FeedbackService {
       const clickupTaskId = await this.clickup.createTicket({
         clientName: site.client.name,
         clientEntityId: site.client.clickupEntityId,
-        siteName: site.siteName,
+        businessName: site.businessName,
         feedback,
         mobileNumber,
       });

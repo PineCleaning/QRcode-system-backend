@@ -3,7 +3,7 @@ import { IsOptional, IsUUID } from 'class-validator';
 export class FindAllMediaQueryDto {
   @IsUUID()
   @IsOptional()
-  clientId?: string;
+  clientCode?: string;
 
   @IsUUID()
   @IsOptional()
