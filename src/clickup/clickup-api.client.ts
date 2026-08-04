@@ -36,9 +36,16 @@ export class ClickupApiClient {
   private readonly clientId: string;
   private readonly clientSecret: string;
 
+  /**
+   * Optional, not getOrThrow: this app now primarily connects via a
+   * personal API token (buildAuthorizeUrl/exchangeCodeForToken below
+   * are unused in that flow) - requiring an OAuth app's client
+   * id/secret to even boot would be a pointless hard dependency on a
+   * path this single-workspace deployment doesn't use.
+   */
   constructor(config: ConfigService) {
-    this.clientId = config.getOrThrow('CLICKUP_CLIENT_ID');
-    this.clientSecret = config.getOrThrow('CLICKUP_CLIENT_SECRET');
+    this.clientId = config.get('CLICKUP_CLIENT_ID') ?? '';
+    this.clientSecret = config.get('CLICKUP_CLIENT_SECRET') ?? '';
   }
 
   buildAuthorizeUrl(redirectUri: string, state: string): string {
