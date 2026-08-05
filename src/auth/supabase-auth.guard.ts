@@ -30,8 +30,18 @@ export class SupabaseAuthGuard implements CanActivate {
    * enough that a revoked/expired token or a deactivated admin is
    * caught almost immediately, and this is a low-traffic internal tool,
    * not a public API where that window matters much.
+   *
+   * inFlight dedupes concurrent cache-miss lookups for the same token:
+   * every admin page in this app fires several parallel requests at
+   * once (Clients/Feedback/Assets all Promise.all several endpoints),
+   * all carrying the same bearer token. Without this, N simultaneous
+   * requests landing before the first one populates the cache would
+   * each independently pay the full Supabase+DB verification cost;
+   * with it, they share one real verification and the rest just await
+   * the same in-flight promise.
    */
   private readonly cache = new Map<string, CacheEntry>();
+  private readonly inFlight = new Map<string, Promise<AdminUser>>();
 
   constructor(
     private readonly supabase: SupabaseService,
@@ -51,6 +61,25 @@ export class SupabaseAuthGuard implements CanActivate {
       return true;
     }
 
+    let pending = this.inFlight.get(token);
+    if (!pending) {
+      // Chaining .finally() returns a *new* promise - if it isn't the
+      // one stored/awaited, a rejection from verifyToken() produces an
+      // untracked floating promise that Node reports as an unhandled
+      // rejection and crashes the process. Storing the .finally()
+      // result itself (not the bare verifyToken() promise) means the
+      // only promise anyone ever awaits is the one whose rejection is
+      // actually handled by every caller's `await pending` below.
+      pending = this.verifyToken(token).finally(() => this.inFlight.delete(token));
+      this.inFlight.set(token, pending);
+    }
+
+    request.adminUser = await pending;
+    return true;
+  }
+
+  /** The actual Supabase + DB verification, shared by all concurrent callers via inFlight. */
+  private async verifyToken(token: string): Promise<AdminUser> {
     const supabaseUser = await this.supabase.getUserFromToken(token);
     if (!supabaseUser) {
       throw new UnauthorizedException('Invalid or expired token');
@@ -63,8 +92,7 @@ export class SupabaseAuthGuard implements CanActivate {
 
     this.cache.set(token, { adminUser, expiresAt: Date.now() + CACHE_TTL_MS });
     this.pruneExpired();
-    request.adminUser = adminUser;
-    return true;
+    return adminUser;
   }
 
   /** Tokens rotate (Supabase refresh) and old ones are never reused again - without this the map would grow forever over a long-running process. Runs on every cache miss, which is cheap at this app's scale. */

@@ -28,6 +28,31 @@ export interface CloudinaryResourceInfo {
   bytes: number;
 }
 
+export interface CloudinaryUsage {
+  plan: string;
+  storageUsedBytes: number;
+  /**
+   * The Free/credit-based plan has no dedicated storage cap - "1 credit"
+   * covers 1,000 transformations OR 1GB storage OR 1GB bandwidth from the
+   * same shared monthly pool (see cloudinary.com/pricing). This is the
+   * storage-equivalent ceiling if every credit went to storage, not a
+   * real separate allowance - shown for a simple at-a-glance bar, not as
+   * a precise guarantee. creditsUsedPercent (overall pool usage) is also
+   * returned so a caller can show the fuller picture if needed.
+   */
+  storageLimitBytes: number;
+  creditsUsedPercent: number;
+  breakdown: {
+    storageCredits: number;
+    bandwidthCredits: number;
+    bandwidthBytes: number;
+    transformationsCredits: number;
+    transformationsCount: number;
+  };
+  totalCreditsUsed: number;
+  totalCreditsLimit: number;
+}
+
 /**
  * Direct-signed-upload flow (Open Decision #6, resolved 2026-07-25): the
  * client uploads straight to Cloudinary using a signature this service
@@ -36,8 +61,25 @@ export interface CloudinaryResourceInfo {
  * before the feedback API (Day 2 Hr 6) trusts it and marks
  * feedback_media.status VERIFIED.
  */
+const USAGE_CACHE_TTL_MS = 60_000;
+
 @Injectable()
 export class CloudinaryService {
+  /**
+   * cloudinary.api.usage() measured at 800-950ms per call - it's an
+   * account-wide stat, not per-request data, so hitting it fresh on
+   * every single Assets page load (or every parallel request on that
+   * page, since the page fires this alongside two other fetches) is
+   * pure waste. A 60s cache means storage/bandwidth numbers can be up
+   * to a minute stale, which is fine for a dashboard widget - nobody
+   * needs sub-minute precision on "how much Cloudinary storage is
+   * used." A single in-flight promise is also shared across
+   * concurrent callers so simultaneous requests (e.g. two admins with
+   * the Assets page open at once) don't each trigger their own call.
+   */
+  private usageCache: { data: CloudinaryUsage; expiresAt: number } | null = null;
+  private usageInFlight: Promise<CloudinaryUsage> | null = null;
+
   constructor(config: ConfigService) {
     cloudinary.config({
       cloud_name: config.getOrThrow('CLOUDINARY_CLOUD_NAME'),
@@ -99,5 +141,47 @@ export class CloudinaryService {
   /** Permanently deletes the asset from Cloudinary storage (used by the admin Assets page). */
   async destroy(publicId: string, resourceType: 'image' | 'video'): Promise<void> {
     await cloudinary.uploader.destroy(publicId, { resource_type: resourceType });
+  }
+
+  /** Read-only account usage, for the Assets page's storage status widget. Cached - see USAGE_CACHE_TTL_MS above. */
+  async getUsage(): Promise<CloudinaryUsage> {
+    if (this.usageCache && this.usageCache.expiresAt > Date.now()) {
+      return this.usageCache.data;
+    }
+
+    // Concurrent callers within the same cache miss share one real
+    // Cloudinary call instead of firing N identical requests.
+    if (this.usageInFlight) {
+      return this.usageInFlight;
+    }
+
+    this.usageInFlight = this.fetchUsage();
+    try {
+      const data = await this.usageInFlight;
+      this.usageCache = { data, expiresAt: Date.now() + USAGE_CACHE_TTL_MS };
+      return data;
+    } finally {
+      this.usageInFlight = null;
+    }
+  }
+
+  private async fetchUsage(): Promise<CloudinaryUsage> {
+    const usage = await cloudinary.api.usage();
+    const creditsLimit = usage.credits?.limit ?? 25;
+    return {
+      plan: usage.plan,
+      storageUsedBytes: usage.storage.usage,
+      storageLimitBytes: creditsLimit * 1024 ** 3,
+      creditsUsedPercent: usage.credits?.used_percent ?? 0,
+      breakdown: {
+        storageCredits: usage.storage.credits_usage ?? 0,
+        bandwidthCredits: usage.bandwidth.credits_usage ?? 0,
+        bandwidthBytes: usage.bandwidth.usage,
+        transformationsCredits: usage.transformations.credits_usage ?? 0,
+        transformationsCount: usage.transformations.usage,
+      },
+      totalCreditsUsed: usage.credits?.usage ?? 0,
+      totalCreditsLimit: creditsLimit,
+    };
   }
 }
