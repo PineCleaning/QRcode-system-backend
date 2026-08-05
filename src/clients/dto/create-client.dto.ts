@@ -18,7 +18,7 @@ export class CreateClientDto {
   @IsString()
   @MinLength(1)
   @MaxLength(200)
-  name!: string;
+  clientName!: string;
 
   @IsEmail()
   @IsOptional()

@@ -53,7 +53,7 @@ export class SitesController {
 
     if (query.format === 'pdf') {
       const pdf = await this.qr.generatePdf(
-        { slug: site.slug, businessName: site.businessName, clientName: site.client.name },
+        { slug: site.slug, businessName: site.businessName, clientName: site.client.clientName },
         query.size ?? 'A4',
       );
       res.setHeader('Content-Type', 'application/pdf');

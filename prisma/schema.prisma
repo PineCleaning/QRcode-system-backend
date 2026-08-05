@@ -129,18 +129,33 @@ model AdminUser {
 /// null for now — no structured Sites list exists in ClickUp today;
 /// site is represented as plain text on the ticket instead.
 model ClickupConnection {
-  id                   String                  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  workspaceId          String                  @unique @map("workspace_id")
-  workspaceName        String?                 @map("workspace_name")
-  encryptedAccessToken String                  @map("encrypted_access_token")
-  status               ClickupConnectionStatus @default(CONNECTED)
-  ticketsListId        String?                 @map("tickets_list_id")
-  companiesListId      String?                 @map("companies_list_id")
-  clientFieldId        String?                 @map("client_field_id")
-  siteFieldId          String?                 @map("site_field_id")
-  connectedBy          String?                 @map("connected_by") @db.Uuid
-  connectedByUser      AdminUser?              @relation(fields: [connectedBy], references: [id])
-  connectedAt          DateTime                @default(now()) @map("connected_at")
+  id                       String                  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  workspaceId              String                  @unique @map("workspace_id")
+  workspaceName            String?                 @map("workspace_name")
+  encryptedAccessToken     String                  @map("encrypted_access_token")
+  status                   ClickupConnectionStatus @default(CONNECTED)
+  ticketsListId            String?                 @map("tickets_list_id")
+  companiesListId          String?                 @map("companies_list_id")
+  clientFieldId            String?                 @map("client_field_id")
+  siteFieldId              String?                 @map("site_field_id")
+  /// Cached once via POST /clickup/setup - the plain-text field a ticket's
+  /// full feedback text + mobile number + attachment links get written to.
+  requestDetailsFieldId    String?                 @map("request_details_field_id")
+  /// Cached once via POST /clickup/setup - the dropdown field every
+  /// ticket's Request Type gets set on.
+  requestTypeFieldId       String?                 @map("request_type_field_id")
+  /// The specific dropdown option id for "Other" - every ticket uses this
+  /// one option (client confirmed no "Feedback" option exists and none
+  /// will be created, per "only insert feedback as tickets").
+  requestTypeOtherOptionId String?                 @map("request_type_other_option_id")
+  /// Cached once via POST /clickup/setup - the "CLIENT ID" field that
+  /// already exists on the COMPANIES list. Matching a ticket's client to
+  /// its Company by this value (our unique client_id) instead of by name
+  /// avoids ambiguity when two records share the same name.
+  companyClientIdFieldId   String?                 @map("company_client_id_field_id")
+  connectedBy              String?                 @map("connected_by") @db.Uuid
+  connectedByUser          AdminUser?              @relation(fields: [connectedBy], references: [id])
+  connectedAt              DateTime                @default(now()) @map("connected_at")
 
   @@index([status])
   @@map("clickup_connections")
@@ -150,7 +165,7 @@ model ClickupConnection {
 model Client {
   id              String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   clientId        String           @unique @map("client_id")
-  name            String
+  clientName      String           @map("client_name")
   contactEmail    String?          @map("contact_email")
   contactPhone    String?          @map("contact_phone")
   status          ClientSiteStatus @default(ACTIVE)
@@ -164,7 +179,7 @@ model Client {
   csvImportRows CsvImportRow[]
 
   @@index([status])
-  @@index([name])
+  @@index([clientName])
   @@map("clients")
 }
 

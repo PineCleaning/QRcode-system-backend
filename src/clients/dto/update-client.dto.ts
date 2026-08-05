@@ -9,7 +9,7 @@ export class UpdateClientDto {
   @MinLength(1)
   @MaxLength(200)
   @IsOptional()
-  name?: string;
+  clientName?: string;
 
   @IsEmail()
   @IsOptional()
