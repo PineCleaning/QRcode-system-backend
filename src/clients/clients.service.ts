@@ -1,18 +1,19 @@
-import { ConflictException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '../../generated/prisma/client';
-import { ClickupService } from '../clickup/clickup.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateClientDto } from './dto/create-client.dto';
 import { UpdateClientDto } from './dto/update-client.dto';
 
+/**
+ * Deliberately does not sync clients to ClickUp's Companies list at
+ * all (create or update) - the client restricted this integration to
+ * "only insert feedback as tickets," so Company records are never
+ * touched from here. See ClickupService.findCompanyByName for the
+ * read-only lookup used instead, at ticket-creation time.
+ */
 @Injectable()
 export class ClientsService {
-  private readonly logger = new Logger(ClientsService.name);
-
-  constructor(
-    private readonly prisma: PrismaService,
-    private readonly clickup: ClickupService,
-  ) {}
+  constructor(private readonly prisma: PrismaService) {}
 
   async create(dto: CreateClientDto, createdBy: string) {
     const clientId = dto.clientId.trim().toLowerCase();
@@ -22,7 +23,7 @@ export class ClientsService {
       client = await this.prisma.client.create({
         data: {
           clientId,
-          name: dto.name.trim(),
+          clientName: dto.clientName.trim(),
           contactEmail: dto.contactEmail ?? null,
           contactPhone: dto.contactPhone ?? null,
           createdBy,
@@ -35,7 +36,6 @@ export class ClientsService {
       throw err;
     }
 
-    await this.syncToClickup(client.id, client);
     // A brand-new client always has 0 sites - attach that directly
     // instead of a second DB round-trip (findOne) just to compute a
     // count that can only ever be zero here.
@@ -104,17 +104,16 @@ export class ClientsService {
   async update(id: string, dto: UpdateClientDto) {
     await this.findOne(id); // 404s if missing
 
-    const client = await this.prisma.client.update({
+    await this.prisma.client.update({
       where: { id },
       data: {
-        ...(dto.name !== undefined && { name: dto.name.trim() }),
+        ...(dto.clientName !== undefined && { clientName: dto.clientName.trim() }),
         ...(dto.contactEmail !== undefined && { contactEmail: dto.contactEmail }),
         ...(dto.contactPhone !== undefined && { contactPhone: dto.contactPhone }),
         ...(dto.status !== undefined && { status: dto.status }),
       },
     });
 
-    await this.syncToClickup(id, client);
     return this.findOne(id);
   }
 
@@ -131,31 +130,6 @@ export class ClientsService {
         );
       }
       throw err;
-    }
-  }
-
-  /**
-   * Non-blocking: a ClickUp outage or missing connection never fails the
-   * client CRUD operation. Every update re-attempts the sync, so a
-   * previously-failed create sync self-heals on the next edit.
-   */
-  private async syncToClickup(clientCode: string, client: { clickupEntityId: string | null; name: string; contactEmail: string | null; contactPhone: string | null; status: string }) {
-    const input = {
-      name: client.name,
-      contactEmail: client.contactEmail,
-      contactPhone: client.contactPhone,
-      status: client.status,
-    };
-
-    try {
-      if (client.clickupEntityId) {
-        await this.clickup.updateCompany(client.clickupEntityId, input);
-      } else {
-        const clickupTaskId = await this.clickup.createCompany(input);
-        await this.prisma.client.update({ where: { id: clientCode }, data: { clickupEntityId: clickupTaskId } });
-      }
-    } catch (err) {
-      this.logger.warn(`ClickUp sync failed for client ${clientCode}: ${err instanceof Error ? err.message : err}`);
     }
   }
 }

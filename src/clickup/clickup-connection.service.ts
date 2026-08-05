@@ -126,6 +126,11 @@ export class ClickupConnectionService implements OnModuleInit {
     ticketsListId: string;
     companiesListId: string;
     clientFieldId: string;
+    requestDetailsFieldId: string;
+    requestTypeFieldId: string;
+    requestTypeOtherOptionId: string;
+    /** Optional - null if the Companies list has no "CLIENT ID" field. Falls back to name matching when unset. */
+    companyClientIdFieldId: string | null;
   }): Promise<ClickupConnection> {
     return this.prisma.clickupConnection.update({
       where: { workspaceId: params.workspaceId },
@@ -133,6 +138,10 @@ export class ClickupConnectionService implements OnModuleInit {
         ticketsListId: params.ticketsListId,
         companiesListId: params.companiesListId,
         clientFieldId: params.clientFieldId,
+        requestDetailsFieldId: params.requestDetailsFieldId,
+        requestTypeFieldId: params.requestTypeFieldId,
+        requestTypeOtherOptionId: params.requestTypeOtherOptionId,
+        companyClientIdFieldId: params.companyClientIdFieldId,
       },
     });
   }
@@ -148,7 +157,14 @@ export class ClickupConnectionService implements OnModuleInit {
         'No ClickUp connection found. An admin needs to connect ClickUp via GET /clickup/oauth/authorize first.',
       );
     }
-    if (!connection.ticketsListId || !connection.companiesListId || !connection.clientFieldId) {
+    if (
+      !connection.ticketsListId ||
+      !connection.companiesListId ||
+      !connection.clientFieldId ||
+      !connection.requestDetailsFieldId ||
+      !connection.requestTypeFieldId ||
+      !connection.requestTypeOtherOptionId
+    ) {
       throw new NotFoundException(
         'ClickUp is connected but not fully configured. Call POST /clickup/setup with ticketsListId and companiesListId first.',
       );

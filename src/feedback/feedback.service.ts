@@ -109,7 +109,7 @@ export class FeedbackService {
       include: { media: true },
     });
 
-    await this.deliverToClickup(submission.id, submission.feedback, submission.mobileNumber, site);
+    await this.deliverToClickup(submission.id, submission.feedback, submission.mobileNumber, submission.media, site);
 
     const final = await this.prisma.feedbackSubmission.findUniqueOrThrow({
       where: { id: submission.id },
@@ -139,17 +139,21 @@ export class FeedbackService {
     feedbackId: string,
     feedback: string,
     mobileNumber: string | null,
-    site: { businessName: string; client: { name: string; clickupEntityId: string | null } },
+    media: { cloudinaryPublicId: string; resourceType: 'IMAGE' | 'VIDEO'; status: string }[],
+    site: { businessName: string; address: string | null; client: { id: string; clientId: string; clientName: string; clickupEntityId: string | null } },
   ) {
     const job = await this.integrationJobs.createInitialJob(feedbackId);
 
     try {
       const clickupTaskId = await this.clickup.createTicket({
-        clientName: site.client.name,
-        clientEntityId: site.client.clickupEntityId,
+        client: site.client,
         businessName: site.businessName,
+        address: site.address,
         feedback,
         mobileNumber,
+        media: media
+          .filter((m) => m.status === 'VERIFIED')
+          .map((m) => ({ cloudinaryPublicId: m.cloudinaryPublicId, resourceType: m.resourceType })),
       });
       await this.integrationJobs.recordSuccess(job.id, feedbackId, clickupTaskId);
     } catch (err) {

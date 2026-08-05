@@ -1,8 +1,7 @@
-import { BadRequestException, Injectable, Logger } from '@nestjs/common';
+import { BadRequestException, Injectable } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import { parse } from 'csv-parse/sync';
 import { Prisma } from '../../generated/prisma/client';
-import { ClickupService } from '../clickup/clickup.service';
 import { PrismaService } from '../prisma/prisma.service';
 
 const MAX_ROWS = 1000; // matches the discovery doc's stated CSV import cap (Section 5.2)
@@ -55,12 +54,7 @@ function slugify(value: string): string {
 
 @Injectable()
 export class CsvImportService {
-  private readonly logger = new Logger(CsvImportService.name);
-
-  constructor(
-    private readonly prisma: PrismaService,
-    private readonly clickup: ClickupService,
-  ) {}
+  constructor(private readonly prisma: PrismaService) {}
 
   async processFile(fileBuffer: Buffer, filename: string, uploadedBy: string) {
     const rows = this.parseCsv(fileBuffer);
@@ -162,12 +156,11 @@ export class CsvImportService {
         const updated = await this.prisma.client.update({
           where: { id: existing.id },
           data: {
-            name: row.clientName,
+            clientName: row.clientName,
             ...(row.contactEmail && { contactEmail: row.contactEmail }),
             ...(row.contactPhone && { contactPhone: row.contactPhone }),
           },
         });
-        await this.syncClientToClickup(updated);
         return updated;
       }
 
@@ -179,44 +172,14 @@ export class CsvImportService {
   }
 
   private async createClient(clientId: string, row: CsvRow) {
-    const created = await this.prisma.client.create({
+    return this.prisma.client.create({
       data: {
         clientId,
-        name: row.clientName,
+        clientName: row.clientName,
         contactEmail: row.contactEmail || null,
         contactPhone: row.contactPhone || null,
       },
     });
-    await this.syncClientToClickup(created);
-    return created;
-  }
-
-  /** Non-blocking, same reasoning as ClientsService.syncToClickup - never fails the row over a ClickUp outage. */
-  private async syncClientToClickup(client: {
-    id: string;
-    clickupEntityId: string | null;
-    name: string;
-    contactEmail: string | null;
-    contactPhone: string | null;
-    status: string;
-  }) {
-    const input = {
-      name: client.name,
-      contactEmail: client.contactEmail,
-      contactPhone: client.contactPhone,
-      status: client.status,
-    };
-
-    try {
-      if (client.clickupEntityId) {
-        await this.clickup.updateCompany(client.clickupEntityId, input);
-      } else {
-        const clickupTaskId = await this.clickup.createCompany(input);
-        await this.prisma.client.update({ where: { id: client.id }, data: { clickupEntityId: clickupTaskId } });
-      }
-    } catch (err) {
-      this.logger.warn(`ClickUp sync failed for client ${client.id} during CSV import: ${err instanceof Error ? err.message : err}`);
-    }
   }
 
   private async generateUniqueClientId(name: string): Promise<string> {

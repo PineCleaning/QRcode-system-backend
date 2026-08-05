@@ -13,6 +13,11 @@ export class AdminMediaController {
     return this.service.findAll(query.clientCode, query.siteId);
   }
 
+  @Get('storage-usage')
+  getStorageUsage() {
+    return this.service.getStorageUsage();
+  }
+
   @Delete(':id')
   @HttpCode(204)
   remove(@Param('id') id: string) {

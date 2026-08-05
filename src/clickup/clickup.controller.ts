@@ -8,6 +8,10 @@ import { ClickupConnectionService } from './clickup-connection.service';
 import { SetupClickupDto } from './dto/setup-clickup.dto';
 
 const DEFAULT_CLIENT_FIELD_NAME = 'CLIENT NAME';
+const DEFAULT_REQUEST_DETAILS_FIELD_NAME = 'REQUEST DETAILS';
+const DEFAULT_REQUEST_TYPE_FIELD_NAME = 'REQUEST TYPE';
+const DEFAULT_REQUEST_TYPE_OPTION_NAME = 'Other';
+const DEFAULT_COMPANY_CLIENT_ID_FIELD_NAME = 'CLIENT ID';
 
 @Controller('clickup')
 export class ClickupController {
@@ -70,20 +74,62 @@ export class ClickupController {
       throw new NotFoundException('Connect ClickUp first via GET /clickup/oauth/authorize');
     }
 
-    const fieldName = dto.clientFieldName ?? DEFAULT_CLIENT_FIELD_NAME;
     const fields = await this.api.getListFields(existing.accessToken, dto.ticketsListId);
-    const clientField = fields.find((f) => f.name.trim().toLowerCase() === fieldName.trim().toLowerCase());
+    const findField = (name: string) => fields.find((f) => f.name.trim().toLowerCase() === name.trim().toLowerCase());
+
+    const clientFieldName = dto.clientFieldName ?? DEFAULT_CLIENT_FIELD_NAME;
+    const clientField = findField(clientFieldName);
     if (!clientField) {
       throw new BadRequestException(
-        `No field named "${fieldName}" found on list ${dto.ticketsListId}. Found: ${fields.map((f) => f.name).join(', ') || '(none)'}`,
+        `No field named "${clientFieldName}" found on list ${dto.ticketsListId}. Found: ${fields.map((f) => f.name).join(', ') || '(none)'}`,
       );
     }
+
+    const requestDetailsFieldName = dto.requestDetailsFieldName ?? DEFAULT_REQUEST_DETAILS_FIELD_NAME;
+    const requestDetailsField = findField(requestDetailsFieldName);
+    if (!requestDetailsField) {
+      throw new BadRequestException(
+        `No field named "${requestDetailsFieldName}" found on list ${dto.ticketsListId}. Found: ${fields.map((f) => f.name).join(', ') || '(none)'}`,
+      );
+    }
+
+    const requestTypeFieldName = dto.requestTypeFieldName ?? DEFAULT_REQUEST_TYPE_FIELD_NAME;
+    const requestTypeField = findField(requestTypeFieldName);
+    if (!requestTypeField) {
+      throw new BadRequestException(
+        `No field named "${requestTypeFieldName}" found on list ${dto.ticketsListId}. Found: ${fields.map((f) => f.name).join(', ') || '(none)'}`,
+      );
+    }
+
+    const requestTypeOptionName = dto.requestTypeOptionName ?? DEFAULT_REQUEST_TYPE_OPTION_NAME;
+    const requestTypeOption = requestTypeField.type_config?.options?.find(
+      (o) => o.name.trim().toLowerCase() === requestTypeOptionName.trim().toLowerCase(),
+    );
+    if (!requestTypeOption) {
+      const available = requestTypeField.type_config?.options?.map((o) => o.name).join(', ') || '(none)';
+      throw new BadRequestException(
+        `No option named "${requestTypeOptionName}" found on field "${requestTypeField.name}". Found: ${available}`,
+      );
+    }
+
+    // Best-effort, not required: if the Companies list has no CLIENT ID
+    // field, matching just falls back to name-only (see
+    // ClickupService.resolveClientEntityId) - don't block setup over it.
+    const companyFields = await this.api.getListFields(existing.accessToken, dto.companiesListId);
+    const companyClientIdFieldName = dto.companyClientIdFieldName ?? DEFAULT_COMPANY_CLIENT_ID_FIELD_NAME;
+    const companyClientIdField = companyFields.find(
+      (f) => f.name.trim().toLowerCase() === companyClientIdFieldName.trim().toLowerCase(),
+    );
 
     const connection = await this.connections.setListConfig({
       workspaceId: existing.connection.workspaceId,
       ticketsListId: dto.ticketsListId,
       companiesListId: dto.companiesListId,
       clientFieldId: clientField.id,
+      requestDetailsFieldId: requestDetailsField.id,
+      requestTypeFieldId: requestTypeField.id,
+      requestTypeOtherOptionId: requestTypeOption.id,
+      companyClientIdFieldId: companyClientIdField?.id ?? null,
     });
 
     return {
@@ -92,6 +138,14 @@ export class ClickupController {
       companiesListId: connection.companiesListId,
       clientFieldId: connection.clientFieldId,
       clientFieldName: clientField.name,
+      requestDetailsFieldId: connection.requestDetailsFieldId,
+      requestDetailsFieldName: requestDetailsField.name,
+      requestTypeFieldId: connection.requestTypeFieldId,
+      requestTypeFieldName: requestTypeField.name,
+      requestTypeOtherOptionId: connection.requestTypeOtherOptionId,
+      requestTypeOptionName: requestTypeOption.name,
+      companyClientIdFieldId: connection.companyClientIdFieldId,
+      companyClientIdFieldName: companyClientIdField?.name ?? null,
     };
   }
 
@@ -108,10 +162,21 @@ export class ClickupController {
       workspaceId: connection.workspaceId,
       workspaceName: connection.workspaceName,
       status: connection.status,
-      configured: Boolean(connection.ticketsListId && connection.companiesListId && connection.clientFieldId),
+      configured: Boolean(
+        connection.ticketsListId &&
+          connection.companiesListId &&
+          connection.clientFieldId &&
+          connection.requestDetailsFieldId &&
+          connection.requestTypeFieldId &&
+          connection.requestTypeOtherOptionId,
+      ),
       ticketsListId: connection.ticketsListId,
       companiesListId: connection.companiesListId,
       clientFieldId: connection.clientFieldId,
+      requestDetailsFieldId: connection.requestDetailsFieldId,
+      requestTypeFieldId: connection.requestTypeFieldId,
+      requestTypeOtherOptionId: connection.requestTypeOtherOptionId,
+      companyClientIdFieldId: connection.companyClientIdFieldId,
     };
   }
 }

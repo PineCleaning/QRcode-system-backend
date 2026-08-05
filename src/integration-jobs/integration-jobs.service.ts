@@ -76,7 +76,7 @@ export class IntegrationJobsService {
       where: { status: 'RETRYING', nextAttemptAt: { lte: new Date() } },
       take: limit,
       include: {
-        feedback: { include: { site: { include: { client: true } } } },
+        feedback: { include: { site: { include: { client: true } }, media: true } },
       },
     });
   }

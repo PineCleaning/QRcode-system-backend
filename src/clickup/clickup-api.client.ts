@@ -7,6 +7,8 @@ export interface ClickupField {
   id: string;
   name: string;
   type: string;
+  /** Only present for type: 'drop_down' fields. */
+  type_config?: { options?: { id: string; name: string }[] };
 }
 
 export interface ClickupTeam {
@@ -23,6 +25,12 @@ export interface ClickupTaskPayload {
   name?: string;
   description?: string;
   status?: string;
+  custom_fields?: ClickupCustomFieldValue[];
+}
+
+export interface ClickupListTask {
+  id: string;
+  name: string;
   custom_fields?: ClickupCustomFieldValue[];
 }
 
@@ -77,6 +85,23 @@ export class ClickupApiClient {
     return (body.teams ?? []) as ClickupTeam[];
   }
 
+  /** Read-only - fetches every task in a list (paginated), including custom field values. Used to search the Companies list; never writes anything. */
+  async getListTasks(accessToken: string, listId: string): Promise<ClickupListTask[]> {
+    const all: ClickupListTask[] = [];
+    let page = 0;
+    for (;;) {
+      const res = await fetch(`${CLICKUP_API_BASE}/list/${listId}/task?page=${page}`, {
+        headers: this.authHeaders(accessToken),
+      });
+      const body = await this.parseJson(res, `fetch tasks for list ${listId}`);
+      const tasks = (body.tasks ?? []) as ClickupListTask[];
+      all.push(...tasks);
+      if (body.last_page || tasks.length === 0) break;
+      page++;
+    }
+    return all;
+  }
+
   async getListFields(accessToken: string, listId: string): Promise<ClickupField[]> {
     const res = await fetch(`${CLICKUP_API_BASE}/list/${listId}/field`, {
       headers: this.authHeaders(accessToken),
@@ -112,6 +137,27 @@ export class ClickupApiClient {
       body: JSON.stringify({ value }),
     });
     await this.parseJson(res, `set custom field ${fieldId} on task ${taskId}`);
+  }
+
+  /** Returns null (not a thrown error) for a 404 - "does this task still exist" is a normal, expected outcome here, used by the reconciliation worker to detect a ticket deleted directly in ClickUp. */
+  async getTask(accessToken: string, taskId: string): Promise<{ id: string } | null> {
+    const res = await fetch(`${CLICKUP_API_BASE}/task/${taskId}`, {
+      headers: this.authHeaders(accessToken),
+    });
+    if (res.status === 404) return null;
+    const body = await this.parseJson(res, `fetch task ${taskId}`);
+    return { id: body.id as string };
+  }
+
+  /** Idempotent - a 404 (already deleted) is treated as success, not an error, so this is safe to call on a ticket that might already be gone. */
+  async deleteTask(accessToken: string, taskId: string): Promise<void> {
+    const res = await fetch(`${CLICKUP_API_BASE}/task/${taskId}`, {
+      method: 'DELETE',
+      headers: this.authHeaders(accessToken),
+    });
+    if (res.status === 404 || res.ok) return;
+    const text = await res.text();
+    throw new InternalServerErrorException(`ClickUp API error while trying to delete task ${taskId}: ${text || res.statusText}`);
   }
 
   private authHeaders(accessToken: string): Record<string, string> {
