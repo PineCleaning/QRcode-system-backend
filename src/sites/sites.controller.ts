@@ -16,14 +16,14 @@ export class SitesController {
     private readonly qr: QrService,
   ) {}
 
-  @Post('clients/:clientId/sites')
-  create(@Param('clientId') clientId: string, @Body() dto: CreateSiteDto) {
-    return this.sites.create(clientId, dto);
+  @Post('clients/:clientCode/sites')
+  create(@Param('clientCode') clientCode: string, @Body() dto: CreateSiteDto) {
+    return this.sites.create(clientCode, dto);
   }
 
-  @Get('clients/:clientId/sites')
-  findAllForClient(@Param('clientId') clientId: string, @Query() query: FindAllSitesQueryDto) {
-    return this.sites.findAllForClient(clientId, query.page, query.pageSize);
+  @Get('clients/:clientCode/sites')
+  findAllForClient(@Param('clientCode') clientCode: string, @Query() query: FindAllSitesQueryDto) {
+    return this.sites.findAllForClient(clientCode, query.page, query.pageSize);
   }
 
   @Get('sites/:id')
@@ -53,7 +53,7 @@ export class SitesController {
 
     if (query.format === 'pdf') {
       const pdf = await this.qr.generatePdf(
-        { slug: site.slug, siteName: site.siteName, clientName: site.client.name },
+        { slug: site.slug, businessName: site.businessName, clientName: site.client.clientName },
         query.size ?? 'A4',
       );
       res.setHeader('Content-Type', 'application/pdf');

@@ -1,12 +1,13 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { ClickupService } from '../clickup/clickup.service';
 import { CloudinaryService } from '../cloudinary/cloudinary.service';
 import { IntegrationJobsService } from '../integration-jobs/integration-jobs.service';
 import { PrismaService } from '../prisma/prisma.service';
 
 /**
  * Global feedback list for the admin "Feedbacks" page - every submission
- * across every client/site, optionally narrowed by clientId/siteId. A
- * validly-formatted but nonexistent clientId/siteId just yields zero
+ * across every client/site, optionally narrowed by clientCode/siteId. A
+ * validly-formatted but nonexistent clientCode/siteId just yields zero
  * matching rows (200 []), not a 404 - the real UI only ever sends ids
  * sourced from GET /clients / GET /clients/:id/sites, so there's no
  * legitimate path to a "does this id exist" question here, and no code
@@ -14,10 +15,13 @@ import { PrismaService } from '../prisma/prisma.service';
  */
 @Injectable()
 export class AdminFeedbackService {
+  private readonly logger = new Logger(AdminFeedbackService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly cloudinary: CloudinaryService,
     private readonly integrationJobs: IntegrationJobsService,
+    private readonly clickup: ClickupService,
   ) {}
 
   /**
@@ -25,10 +29,10 @@ export class AdminFeedbackService {
    * present -> paginated { data, total, page, pageSize } shape instead,
    * matching ClientsService.findAll's pattern.
    */
-  async findAll(clientId?: string, siteId?: string, page?: number, pageSize?: number) {
+  async findAll(clientCode?: string, siteId?: string, page?: number, pageSize?: number) {
     const where = {
       ...(siteId && { siteId }),
-      ...(clientId && { site: { clientId } }),
+      ...(clientCode && { site: { clientCode } }),
     };
 
     const withMediaUrls = <T extends { media: { status: string; cloudinaryPublicId: string; resourceType: string }[] }>(submission: T) => ({
@@ -47,9 +51,9 @@ export class AdminFeedbackService {
       site: {
         select: {
           id: true,
-          siteName: true,
+          businessName: true,
           slug: true,
-          client: { select: { id: true, name: true, clientCode: true } },
+          client: { select: { id: true, clientName: true, clientId: true } },
         },
       },
     } as const;
@@ -85,5 +89,49 @@ export class AdminFeedbackService {
   /** Manually re-triggers delivery for a permanently FAILED submission (resets the 5-attempt cycle). */
   async retry(feedbackId: string): Promise<void> {
     await this.integrationJobs.resetForRetry(feedbackId);
+  }
+
+  /**
+   * Two-way delete: removing a feedback submission from the dashboard also
+   * deletes its ClickUp ticket (if any), and the reconciliation cron
+   * (FeedbackReconciliationService) calls this same method when it finds
+   * a ticket was deleted directly in ClickUp instead - either direction
+   * ends up here, so both sides can never drift out of sync.
+   *
+   * ClickUp deletion and Cloudinary cleanup are both best-effort: a
+   * failure on either (ClickUp not connected, an already-gone ticket, a
+   * transient Cloudinary error) is logged and never blocks the local
+   * delete - same non-blocking-external-failure pattern already used for
+   * ClickUp sync and AdminMediaService.remove()'s Cloudinary cleanup.
+   */
+  async remove(id: string): Promise<void> {
+    const feedback = await this.prisma.feedbackSubmission.findUnique({
+      where: { id },
+      include: { media: true },
+    });
+    if (!feedback) {
+      throw new NotFoundException(`Feedback ${id} not found`);
+    }
+
+    if (feedback.clickupTaskId) {
+      try {
+        await this.clickup.deleteTicket(feedback.clickupTaskId);
+      } catch (err) {
+        this.logger.warn(
+          `ClickUp ticket delete failed for feedback ${id} (task ${feedback.clickupTaskId}): ${err instanceof Error ? err.message : err}`,
+        );
+      }
+    }
+
+    for (const media of feedback.media) {
+      try {
+        await this.cloudinary.destroy(media.cloudinaryPublicId, media.resourceType.toLowerCase() as 'image' | 'video');
+      } catch (err) {
+        this.logger.warn(`Cloudinary destroy failed for media ${media.id}: ${err instanceof Error ? err.message : err}`);
+      }
+    }
+
+    // Cascades feedback_media + integration_jobs (onDelete: Cascade in schema.prisma).
+    await this.prisma.feedbackSubmission.delete({ where: { id } });
   }
 }

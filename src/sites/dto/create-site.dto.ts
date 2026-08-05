@@ -5,7 +5,7 @@ export class CreateSiteDto {
   @IsString()
   @MinLength(1)
   @MaxLength(200)
-  siteName!: string;
+  businessName!: string;
 
   @IsString()
   @MinLength(1)

@@ -1,21 +1,71 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import type { ClickupConnection } from '../../generated/prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { ClickupApiClient } from './clickup-api.client';
 import { decryptToken, encryptToken } from './clickup-crypto.util';
 
 const STATE_TTL_MS = 10 * 60 * 1000; // 10 minutes
 
 @Injectable()
-export class ClickupConnectionService {
+export class ClickupConnectionService implements OnModuleInit {
+  private readonly logger = new Logger(ClickupConnectionService.name);
   private readonly encryptionKey: string;
 
   constructor(
     private readonly prisma: PrismaService,
-    config: ConfigService,
+    private readonly api: ClickupApiClient,
+    private readonly config: ConfigService,
   ) {
     this.encryptionKey = config.getOrThrow('CLICKUP_TOKEN_ENCRYPTION_KEY');
+  }
+
+  /**
+   * Self-activating, same pattern as Cloudinary/ClickUp elsewhere in this
+   * app: no-op until CLICKUP_API_TOKEN is set in .env, then connects
+   * automatically on the next boot - no admin API call needed. Chosen
+   * over the OAuth flow originally built (still present, unused) because
+   * ClickUp's self-service "Create an App" OAuth registration wasn't
+   * available in this workspace's dashboard; a personal API token is
+   * ClickUp's own recommended path for a single-workspace integration
+   * like this one anyway. Runs on every boot (idempotent upsert), so
+   * rotating the token in .env and restarting is all that's needed to
+   * pick up a new one.
+   */
+  async onModuleInit() {
+    const token = this.config.get<string>('CLICKUP_API_TOKEN');
+    if (!token) return;
+
+    try {
+      const teams = await this.api.getAuthorizedTeams(token);
+      if (teams.length === 0) {
+        this.logger.warn('CLICKUP_API_TOKEN is set but ClickUp returned no authorized workspace for it');
+        return;
+      }
+
+      // A personal token can be valid for more than one workspace (e.g.
+      // the admin's own personal workspace plus the business one) -
+      // CLICKUP_WORKSPACE_ID pins which one to use rather than silently
+      // picking whichever ClickUp's API happens to list first.
+      const targetWorkspaceId = this.config.get<string>('CLICKUP_WORKSPACE_ID');
+      const team = targetWorkspaceId ? teams.find((t) => t.id === targetWorkspaceId) : teams[0];
+      if (!team) {
+        this.logger.warn(
+          `CLICKUP_WORKSPACE_ID=${targetWorkspaceId} not found among this token's authorized workspaces (${teams.map((t) => `${t.name} (${t.id})`).join(', ')})`,
+        );
+        return;
+      }
+      await this.upsertConnection({
+        workspaceId: team.id,
+        workspaceName: team.name ?? null,
+        accessToken: token,
+        connectedBy: null,
+      });
+      this.logger.log(`ClickUp connected via CLICKUP_API_TOKEN to workspace "${team.name}" (${team.id})`);
+    } catch (err) {
+      this.logger.warn(`Failed to auto-connect ClickUp from CLICKUP_API_TOKEN: ${err instanceof Error ? err.message : err}`);
+    }
   }
 
   /** Signs a short-lived OAuth `state` value tied to the initiating admin, with no server-side session store needed. */
@@ -48,7 +98,8 @@ export class ClickupConnectionService {
     workspaceId: string;
     workspaceName: string | null;
     accessToken: string;
-    connectedBy: string;
+    /** Null for a connection established automatically from CLICKUP_API_TOKEN, with no initiating admin. */
+    connectedBy: string | null;
   }): Promise<ClickupConnection> {
     const encryptedAccessToken = encryptToken(params.accessToken, this.encryptionKey);
     return this.prisma.clickupConnection.upsert({
@@ -75,6 +126,11 @@ export class ClickupConnectionService {
     ticketsListId: string;
     companiesListId: string;
     clientFieldId: string;
+    requestDetailsFieldId: string;
+    requestTypeFieldId: string;
+    requestTypeOtherOptionId: string;
+    /** Optional - null if the Companies list has no "CLIENT ID" field. Falls back to name matching when unset. */
+    companyClientIdFieldId: string | null;
   }): Promise<ClickupConnection> {
     return this.prisma.clickupConnection.update({
       where: { workspaceId: params.workspaceId },
@@ -82,6 +138,10 @@ export class ClickupConnectionService {
         ticketsListId: params.ticketsListId,
         companiesListId: params.companiesListId,
         clientFieldId: params.clientFieldId,
+        requestDetailsFieldId: params.requestDetailsFieldId,
+        requestTypeFieldId: params.requestTypeFieldId,
+        requestTypeOtherOptionId: params.requestTypeOtherOptionId,
+        companyClientIdFieldId: params.companyClientIdFieldId,
       },
     });
   }
@@ -97,7 +157,14 @@ export class ClickupConnectionService {
         'No ClickUp connection found. An admin needs to connect ClickUp via GET /clickup/oauth/authorize first.',
       );
     }
-    if (!connection.ticketsListId || !connection.companiesListId || !connection.clientFieldId) {
+    if (
+      !connection.ticketsListId ||
+      !connection.companiesListId ||
+      !connection.clientFieldId ||
+      !connection.requestDetailsFieldId ||
+      !connection.requestTypeFieldId ||
+      !connection.requestTypeOtherOptionId
+    ) {
       throw new NotFoundException(
         'ClickUp is connected but not fully configured. Call POST /clickup/setup with ticketsListId and companiesListId first.',
       );

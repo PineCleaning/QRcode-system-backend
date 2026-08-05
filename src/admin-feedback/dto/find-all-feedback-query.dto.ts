@@ -4,7 +4,7 @@ import { IsInt, IsOptional, IsUUID, Max, Min } from 'class-validator';
 export class FindAllFeedbackQueryDto {
   @IsUUID()
   @IsOptional()
-  clientId?: string;
+  clientCode?: string;
 
   @IsUUID()
   @IsOptional()

@@ -18,12 +18,12 @@ export class AdminMediaService {
     private readonly cloudinary: CloudinaryService,
   ) {}
 
-  async findAll(clientId?: string, siteId?: string) {
+  async findAll(clientCode?: string, siteId?: string) {
     const items = await this.prisma.feedbackMedia.findMany({
       where: {
         status: 'VERIFIED',
         ...(siteId && { feedback: { siteId } }),
-        ...(clientId && { feedback: { site: { clientId } } }),
+        ...(clientCode && { feedback: { site: { clientCode } } }),
       },
       orderBy: { createdAt: 'desc' },
       include: {
@@ -33,9 +33,9 @@ export class AdminMediaService {
             site: {
               select: {
                 id: true,
-                siteName: true,
+                businessName: true,
                 slug: true,
-                client: { select: { id: true, name: true, clientCode: true } },
+                client: { select: { id: true, clientName: true, clientId: true } },
               },
             },
           },
@@ -49,6 +49,10 @@ export class AdminMediaService {
       ...item,
       url: this.cloudinary.buildDeliveryUrl(item.cloudinaryPublicId, item.resourceType.toLowerCase() as 'image' | 'video'),
     }));
+  }
+
+  async getStorageUsage() {
+    return this.cloudinary.getUsage();
   }
 
   async remove(id: string): Promise<void> {

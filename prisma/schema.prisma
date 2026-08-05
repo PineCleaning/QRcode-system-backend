@@ -129,18 +129,33 @@ model AdminUser {
 /// null for now — no structured Sites list exists in ClickUp today;
 /// site is represented as plain text on the ticket instead.
 model ClickupConnection {
-  id                   String                  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  workspaceId          String                  @unique @map("workspace_id")
-  workspaceName        String?                 @map("workspace_name")
-  encryptedAccessToken String                  @map("encrypted_access_token")
-  status               ClickupConnectionStatus @default(CONNECTED)
-  ticketsListId        String?                 @map("tickets_list_id")
-  companiesListId      String?                 @map("companies_list_id")
-  clientFieldId        String?                 @map("client_field_id")
-  siteFieldId          String?                 @map("site_field_id")
-  connectedBy          String?                 @map("connected_by") @db.Uuid
-  connectedByUser      AdminUser?              @relation(fields: [connectedBy], references: [id])
-  connectedAt          DateTime                @default(now()) @map("connected_at")
+  id                       String                  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  workspaceId              String                  @unique @map("workspace_id")
+  workspaceName            String?                 @map("workspace_name")
+  encryptedAccessToken     String                  @map("encrypted_access_token")
+  status                   ClickupConnectionStatus @default(CONNECTED)
+  ticketsListId            String?                 @map("tickets_list_id")
+  companiesListId          String?                 @map("companies_list_id")
+  clientFieldId            String?                 @map("client_field_id")
+  siteFieldId              String?                 @map("site_field_id")
+  /// Cached once via POST /clickup/setup - the plain-text field a ticket's
+  /// full feedback text + mobile number + attachment links get written to.
+  requestDetailsFieldId    String?                 @map("request_details_field_id")
+  /// Cached once via POST /clickup/setup - the dropdown field every
+  /// ticket's Request Type gets set on.
+  requestTypeFieldId       String?                 @map("request_type_field_id")
+  /// The specific dropdown option id for "Other" - every ticket uses this
+  /// one option (client confirmed no "Feedback" option exists and none
+  /// will be created, per "only insert feedback as tickets").
+  requestTypeOtherOptionId String?                 @map("request_type_other_option_id")
+  /// Cached once via POST /clickup/setup - the "CLIENT ID" field that
+  /// already exists on the COMPANIES list. Matching a ticket's client to
+  /// its Company by this value (our unique client_id) instead of by name
+  /// avoids ambiguity when two records share the same name.
+  companyClientIdFieldId   String?                 @map("company_client_id_field_id")
+  connectedBy              String?                 @map("connected_by") @db.Uuid
+  connectedByUser          AdminUser?              @relation(fields: [connectedBy], references: [id])
+  connectedAt              DateTime                @default(now()) @map("connected_at")
 
   @@index([status])
   @@map("clickup_connections")
@@ -149,8 +164,8 @@ model ClickupConnection {
 /// One row per client company of the cleaning business.
 model Client {
   id              String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  clientCode      String           @unique @map("client_code")
-  name            String
+  clientId        String           @unique @map("client_id")
+  clientName      String           @map("client_name")
   contactEmail    String?          @map("contact_email")
   contactPhone    String?          @map("contact_phone")
   status          ClientSiteStatus @default(ACTIVE)
@@ -164,7 +179,7 @@ model Client {
   csvImportRows CsvImportRow[]
 
   @@index([status])
-  @@index([name])
+  @@index([clientName])
   @@map("clients")
 }
 
@@ -173,11 +188,11 @@ model Client {
 /// layer, not as a DB constraint).
 model Site {
   id              String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  clientId        String           @map("client_id") @db.Uuid
-  client          Client           @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  clientCode      String           @map("client_code") @db.Uuid
+  client          Client           @relation(fields: [clientCode], references: [id], onDelete: Cascade)
   siteCode        String           @map("site_code")
   slug            String           @unique
-  siteName        String           @map("site_name")
+  businessName    String           @map("business_name")
   address         String?
   status          ClientSiteStatus @default(ACTIVE)
   clickupEntityId String?          @map("clickup_entity_id")
@@ -187,7 +202,7 @@ model Site {
   feedbackSubmissions FeedbackSubmission[]
   csvImportRows       CsvImportRow[]
 
-  @@unique([clientId, siteCode], map: "uq_client_site_code")
+  @@unique([clientCode, siteCode], map: "uq_client_site_code")
   @@index([status])
   @@index([slug])
   @@map("sites")
@@ -221,16 +236,16 @@ model FeedbackSubmission {
 /// Photos/videos attached to a feedback submission. No stored URL —
 /// derive it from cloudinaryPublicId + resourceType at read time.
 model FeedbackMedia {
-  id                 String              @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  feedbackId         String              @map("feedback_id") @db.Uuid
-  feedback           FeedbackSubmission  @relation(fields: [feedbackId], references: [id], onDelete: Cascade)
-  cloudinaryPublicId String              @unique @map("cloudinary_public_id")
-  resourceType       MediaResourceType   @map("resource_type")
-  originalFilename   String?             @map("original_filename")
-  mimeType           String              @map("mime_type")
-  sizeBytes          Int                 @map("size_bytes")
-  status             MediaStatus         @default(PENDING)
-  createdAt          DateTime            @default(now()) @map("created_at")
+  id                 String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  feedbackId         String             @map("feedback_id") @db.Uuid
+  feedback           FeedbackSubmission @relation(fields: [feedbackId], references: [id], onDelete: Cascade)
+  cloudinaryPublicId String             @unique @map("cloudinary_public_id")
+  resourceType       MediaResourceType  @map("resource_type")
+  originalFilename   String?            @map("original_filename")
+  mimeType           String             @map("mime_type")
+  sizeBytes          Int                @map("size_bytes")
+  status             MediaStatus        @default(PENDING)
+  createdAt          DateTime           @default(now()) @map("created_at")
 
   @@index([feedbackId])
   @@map("feedback_media")
@@ -255,15 +270,15 @@ model CsvImportBatch {
   @@map("csv_import_batches")
 }
 
-/// One row per line in a CSV upload, with per-row result. client_id
+/// One row per line in a CSV upload, with per-row result. client_code
 /// and site_id are nullable: a failed row never created one.
 model CsvImportRow {
   id           String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   batchId      String         @map("batch_id") @db.Uuid
   batch        CsvImportBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
   rowNumber    Int            @map("row_number")
-  clientId     String?        @map("client_id") @db.Uuid
-  client       Client?        @relation(fields: [clientId], references: [id], onDelete: SetNull)
+  clientCode   String?        @map("client_code") @db.Uuid
+  client       Client?        @relation(fields: [clientCode], references: [id], onDelete: SetNull)
   siteId       String?        @map("site_id") @db.Uuid
   site         Site?          @relation(fields: [siteId], references: [id], onDelete: SetNull)
   status       CsvRowStatus

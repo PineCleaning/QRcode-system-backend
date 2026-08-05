@@ -21,8 +21,9 @@ export class PublicService {
 
     return {
       slug: site.slug,
-      siteName: site.siteName,
-      clientName: site.client.name,
+      businessName: site.businessName,
+      address: site.address,
+      clientName: site.client.clientName,
     };
   }
 }

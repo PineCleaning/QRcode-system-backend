@@ -7,6 +7,8 @@ export interface ClickupField {
   id: string;
   name: string;
   type: string;
+  /** Only present for type: 'drop_down' fields. */
+  type_config?: { options?: { id: string; name: string }[] };
 }
 
 export interface ClickupTeam {
@@ -26,6 +28,12 @@ export interface ClickupTaskPayload {
   custom_fields?: ClickupCustomFieldValue[];
 }
 
+export interface ClickupListTask {
+  id: string;
+  name: string;
+  custom_fields?: ClickupCustomFieldValue[];
+}
+
 /**
  * Thin wrapper around the raw ClickUp REST API (v2). No business logic here -
  * that lives in ClickupService. Never creates Lists/Folders/Spaces/custom
@@ -36,9 +44,16 @@ export class ClickupApiClient {
   private readonly clientId: string;
   private readonly clientSecret: string;
 
+  /**
+   * Optional, not getOrThrow: this app now primarily connects via a
+   * personal API token (buildAuthorizeUrl/exchangeCodeForToken below
+   * are unused in that flow) - requiring an OAuth app's client
+   * id/secret to even boot would be a pointless hard dependency on a
+   * path this single-workspace deployment doesn't use.
+   */
   constructor(config: ConfigService) {
-    this.clientId = config.getOrThrow('CLICKUP_CLIENT_ID');
-    this.clientSecret = config.getOrThrow('CLICKUP_CLIENT_SECRET');
+    this.clientId = config.get('CLICKUP_CLIENT_ID') ?? '';
+    this.clientSecret = config.get('CLICKUP_CLIENT_SECRET') ?? '';
   }
 
   buildAuthorizeUrl(redirectUri: string, state: string): string {
@@ -68,6 +83,23 @@ export class ClickupApiClient {
     });
     const body = await this.parseJson(res, 'fetch authorized teams');
     return (body.teams ?? []) as ClickupTeam[];
+  }
+
+  /** Read-only - fetches every task in a list (paginated), including custom field values. Used to search the Companies list; never writes anything. */
+  async getListTasks(accessToken: string, listId: string): Promise<ClickupListTask[]> {
+    const all: ClickupListTask[] = [];
+    let page = 0;
+    for (;;) {
+      const res = await fetch(`${CLICKUP_API_BASE}/list/${listId}/task?page=${page}`, {
+        headers: this.authHeaders(accessToken),
+      });
+      const body = await this.parseJson(res, `fetch tasks for list ${listId}`);
+      const tasks = (body.tasks ?? []) as ClickupListTask[];
+      all.push(...tasks);
+      if (body.last_page || tasks.length === 0) break;
+      page++;
+    }
+    return all;
   }
 
   async getListFields(accessToken: string, listId: string): Promise<ClickupField[]> {
@@ -105,6 +137,27 @@ export class ClickupApiClient {
       body: JSON.stringify({ value }),
     });
     await this.parseJson(res, `set custom field ${fieldId} on task ${taskId}`);
+  }
+
+  /** Returns null (not a thrown error) for a 404 - "does this task still exist" is a normal, expected outcome here, used by the reconciliation worker to detect a ticket deleted directly in ClickUp. */
+  async getTask(accessToken: string, taskId: string): Promise<{ id: string } | null> {
+    const res = await fetch(`${CLICKUP_API_BASE}/task/${taskId}`, {
+      headers: this.authHeaders(accessToken),
+    });
+    if (res.status === 404) return null;
+    const body = await this.parseJson(res, `fetch task ${taskId}`);
+    return { id: body.id as string };
+  }
+
+  /** Idempotent - a 404 (already deleted) is treated as success, not an error, so this is safe to call on a ticket that might already be gone. */
+  async deleteTask(accessToken: string, taskId: string): Promise<void> {
+    const res = await fetch(`${CLICKUP_API_BASE}/task/${taskId}`, {
+      method: 'DELETE',
+      headers: this.authHeaders(accessToken),
+    });
+    if (res.status === 404 || res.ok) return;
+    const text = await res.text();
+    throw new InternalServerErrorException(`ClickUp API error while trying to delete task ${taskId}: ${text || res.statusText}`);
   }
 
   private authHeaders(accessToken: string): Record<string, string> {

@@ -37,11 +37,14 @@ export class RetryWorkerService {
       const nextAttemptCount = job.attemptCount + 1;
       try {
         const clickupTaskId = await this.clickup.createTicket({
-          clientName: job.feedback.site.client.name,
-          clientEntityId: job.feedback.site.client.clickupEntityId,
-          siteName: job.feedback.site.siteName,
+          client: job.feedback.site.client,
+          businessName: job.feedback.site.businessName,
+          address: job.feedback.site.address,
           feedback: job.feedback.feedback,
           mobileNumber: job.feedback.mobileNumber,
+          media: job.feedback.media
+            .filter((m) => m.status === 'VERIFIED')
+            .map((m) => ({ cloudinaryPublicId: m.cloudinaryPublicId, resourceType: m.resourceType })),
         });
         await this.jobs.recordSuccess(job.id, job.feedbackId, clickupTaskId);
       } catch (err) {

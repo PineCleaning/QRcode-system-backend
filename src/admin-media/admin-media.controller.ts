@@ -10,7 +10,12 @@ export class AdminMediaController {
 
   @Get()
   findAll(@Query() query: FindAllMediaQueryDto) {
-    return this.service.findAll(query.clientId, query.siteId);
+    return this.service.findAll(query.clientCode, query.siteId);
+  }
+
+  @Get('storage-usage')
+  getStorageUsage() {
+    return this.service.getStorageUsage();
   }
 
   @Delete(':id')

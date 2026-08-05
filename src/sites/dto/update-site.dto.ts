@@ -6,7 +6,7 @@ export class UpdateSiteDto {
   @MinLength(1)
   @MaxLength(200)
   @IsOptional()
-  siteName?: string;
+  businessName?: string;
 
   @IsString()
   @MaxLength(300)

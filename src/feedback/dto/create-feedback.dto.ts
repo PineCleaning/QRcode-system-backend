@@ -40,7 +40,6 @@ export class CreateFeedbackDto {
 
   @IsString()
   @MinLength(1)
-  @MaxLength(5000)
   feedback!: string;
 
   @IsString()

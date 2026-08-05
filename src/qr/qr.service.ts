@@ -17,7 +17,7 @@ export type QrPageSize = 'A4' | 'A5';
 
 export interface QrPrintInfo {
   slug: string;
-  siteName: string;
+  businessName: string;
   clientName: string;
 }
 
