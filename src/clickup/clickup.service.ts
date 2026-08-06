@@ -166,6 +166,37 @@ export class ClickupService {
     return null;
   }
 
+  /**
+   * Used by reconciliation to recover a feedback stuck at SUBMITTED with
+   * no clickupTaskId recorded, whose delivery may have actually
+   * succeeded before something (a deploy, a dropped connection, a
+   * process restart) interrupted the request before the DB write that
+   * records that success ran. Searches for a ticket with the exact
+   * expected title, created within a window around when the feedback
+   * was submitted, rather than trusting our own (possibly incomplete)
+   * records. Ambiguous (more than one candidate) is never guessed at -
+   * same reasoning as resolveClientEntityId below - left for a human to
+   * sort out instead of silently adopting the wrong ticket.
+   */
+  async findExistingTicketForFeedback(clientName: string, businessName: string, submittedAt: Date): Promise<string | null> {
+    const { connection, accessToken } = await this.connections.getReadyConnection();
+    const windowMs = 30 * 60_000; // generous enough to survive any real delivery delay, tight enough to avoid an unrelated later ticket with the same title
+    const since = submittedAt.getTime() - windowMs;
+    const until = submittedAt.getTime() + windowMs;
+
+    const tasks = await this.api.getListTasksCreatedBetween(accessToken, connection.ticketsListId!, since, until);
+    const expectedName = `${clientName} — ${businessName}`;
+    const matches = tasks.filter((t) => t.name === expectedName);
+
+    if (matches.length === 1) return matches[0].id;
+    if (matches.length > 1) {
+      this.logger.warn(
+        `Reconciliation: found ${matches.length} candidate tickets titled "${expectedName}" near ${submittedAt.toISOString()} - ambiguous, not adopting any.`,
+      );
+    }
+    return null;
+  }
+
   /** Cheap pre-check for callers (e.g. the reconciliation cron) that want to skip a whole batch of work when ClickUp isn't connected at all, rather than throwing once per row. */
   async isConnected(): Promise<boolean> {
     return (await this.connections.getAnyConnection()) !== null;

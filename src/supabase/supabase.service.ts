@@ -12,12 +12,20 @@ export class SupabaseService {
     });
   }
 
-  /** Verifies an access token against Supabase Auth and returns the user, or null if invalid. */
-  async getUserFromToken(accessToken: string) {
-    const { data, error } = await this.client.auth.getUser(accessToken);
-    if (error || !data.user) {
+  /**
+   * Verifies an access token's signature locally against Supabase's cached
+   * JWKS (this project uses asymmetric ES256 signing) instead of always
+   * calling the Auth server the way getUser() does - measured ~1-2ms here
+   * vs ~220-700ms for getUser(), on every cache-miss request in
+   * SupabaseAuthGuard. Returns the verified claims (claims.sub is the
+   * user id, the only field SupabaseAuthGuard actually needs) or null if
+   * invalid/expired.
+   */
+  async getClaimsFromToken(accessToken: string) {
+    const { data, error } = await this.client.auth.getClaims(accessToken);
+    if (error || !data?.claims) {
       return null;
     }
-    return data.user;
+    return data.claims;
   }
 }

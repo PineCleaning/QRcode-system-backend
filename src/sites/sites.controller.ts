@@ -1,5 +1,5 @@
-import { Body, Controller, Delete, Get, HttpCode, Param, Post, Put, Query, Res, UseGuards } from '@nestjs/common';
-import type { Response } from 'express';
+import { Body, Controller, Delete, Get, HttpCode, Param, Post, Put, Query, Req, Res, UseGuards } from '@nestjs/common';
+import type { Request, Response } from 'express';
 import { SupabaseAuthGuard } from '../auth/supabase-auth.guard';
 import { QrService } from '../qr/qr.service';
 import { DownloadQrQueryDto } from './dto/download-qr-query.dto';
@@ -48,23 +48,31 @@ export class SitesController {
   }
 
   @Get('sites/:id/qr')
-  async downloadQr(@Param('id') id: string, @Query() query: DownloadQrQueryDto, @Res() res: Response) {
+  async downloadQr(@Param('id') id: string, @Query() query: DownloadQrQueryDto, @Req() req: Request, @Res() res: Response) {
     const site = await this.sites.findOneWithClient(id);
+    const isPdf = query.format === 'pdf';
 
-    if (query.format === 'pdf') {
-      const pdf = await this.qr.generatePdf(
-        { slug: site.slug, businessName: site.businessName, clientName: site.client.clientName },
-        query.size ?? 'A4',
-      );
-      res.setHeader('Content-Type', 'application/pdf');
-      res.setHeader('Content-Disposition', `attachment; filename="${site.slug}.pdf"`);
-      res.send(pdf);
+    const asset = isPdf
+      ? await this.qr.getPdf(
+          { slug: site.slug, businessName: site.businessName, clientName: site.client.clientName },
+          query.size ?? 'A4',
+        )
+      : await this.qr.getPng(site.slug);
+
+    res.setHeader('Content-Type', isPdf ? 'application/pdf' : 'image/png');
+    res.setHeader('Content-Disposition', `attachment; filename="${site.slug}.${isPdf ? 'pdf' : 'png'}"`);
+    res.setHeader('ETag', asset.etag);
+    // A site's slug is immutable, so its QR content for a given
+    // format/size never changes once generated - safe to let the
+    // browser cache indefinitely and just revalidate via ETag instead
+    // of re-downloading on every repeat view.
+    res.setHeader('Cache-Control', 'private, max-age=31536000, immutable');
+
+    if (req.headers['if-none-match'] === asset.etag) {
+      res.status(304).end();
       return;
     }
 
-    const png = await this.qr.generatePng(site.slug);
-    res.setHeader('Content-Type', 'image/png');
-    res.setHeader('Content-Disposition', `attachment; filename="${site.slug}.png"`);
-    res.send(png);
+    res.send(asset.buffer);
   }
 }

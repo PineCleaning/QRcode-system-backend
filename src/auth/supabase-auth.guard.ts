@@ -80,12 +80,12 @@ export class SupabaseAuthGuard implements CanActivate {
 
   /** The actual Supabase + DB verification, shared by all concurrent callers via inFlight. */
   private async verifyToken(token: string): Promise<AdminUser> {
-    const supabaseUser = await this.supabase.getUserFromToken(token);
-    if (!supabaseUser) {
+    const claims = await this.supabase.getClaimsFromToken(token);
+    if (!claims) {
       throw new UnauthorizedException('Invalid or expired token');
     }
 
-    const adminUser = await this.prisma.adminUser.findUnique({ where: { id: supabaseUser.id } });
+    const adminUser = await this.prisma.adminUser.findUnique({ where: { id: claims.sub } });
     if (!adminUser || adminUser.status !== 'ACTIVE') {
       throw new UnauthorizedException('Not an active admin user');
     }
