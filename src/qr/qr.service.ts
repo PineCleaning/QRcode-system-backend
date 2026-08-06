@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
@@ -19,6 +20,11 @@ export interface QrPrintInfo {
   slug: string;
   businessName: string;
   clientName: string;
+}
+
+export interface CachedQrAsset {
+  buffer: Buffer;
+  etag: string;
 }
 
 /**
@@ -49,6 +55,37 @@ const QR_PLACEHOLDER = { left: 385, top: 1043, width: 638, height: 711 };
 @Injectable()
 export class QrService {
   constructor(private readonly config: ConfigService) {}
+
+  /**
+   * A site's QR content is fully deterministic from its slug (immutable
+   * once created) plus format/size - it never needs to expire or be
+   * invalidated, only grow. At this app's real scale (hundreds of
+   * sites, a handful of format/size combos each, buffers in the
+   * tens-to-low-hundreds of KB) that's a few MB total for the life of
+   * the process - a non-issue, no eviction needed. inFlight dedupes a
+   * burst of concurrent requests for the same not-yet-cached QR to one
+   * real sharp/pdfkit render instead of each paying that cost.
+   */
+  private readonly cache = new Map<string, CachedQrAsset>();
+  private readonly inFlight = new Map<string, Promise<CachedQrAsset>>();
+
+  private async getOrRender(key: string, render: () => Promise<Buffer>): Promise<CachedQrAsset> {
+    const cached = this.cache.get(key);
+    if (cached) return cached;
+
+    let pending = this.inFlight.get(key);
+    if (!pending) {
+      pending = render()
+        .then((buffer) => {
+          const asset: CachedQrAsset = { buffer, etag: `"${createHash('sha1').update(key).digest('hex')}"` };
+          this.cache.set(key, asset);
+          return asset;
+        })
+        .finally(() => this.inFlight.delete(key));
+      this.inFlight.set(key, pending);
+    }
+    return pending;
+  }
 
   buildTargetUrl(slug: string): string {
     const baseDomain = this.config.get<string>('BASE_DOMAIN') || 'http://localhost:3000';
@@ -85,12 +122,16 @@ export class QrService {
       .toBuffer();
   }
 
-  async generatePng(slug: string): Promise<Buffer> {
-    return this.compositeOntoTemplate(slug);
+  async getPng(slug: string): Promise<CachedQrAsset> {
+    return this.getOrRender(`png:${slug}`, () => this.compositeOntoTemplate(slug));
   }
 
   /** Full-bleed A4/A5 PDF of the branded template with the real QR composited in. */
-  async generatePdf(info: QrPrintInfo, size: QrPageSize): Promise<Buffer> {
+  async getPdf(info: QrPrintInfo, size: QrPageSize): Promise<CachedQrAsset> {
+    return this.getOrRender(`pdf:${size}:${info.slug}`, () => this.renderPdf(info, size));
+  }
+
+  private async renderPdf(info: QrPrintInfo, size: QrPageSize): Promise<Buffer> {
     const composited = await this.compositeOntoTemplate(info.slug);
 
     return new Promise((resolve, reject) => {
