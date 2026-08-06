@@ -102,6 +102,30 @@ export class ClickupApiClient {
     return all;
   }
 
+  /**
+   * Read-only, narrowed by ClickUp's own date_created_gt/date_created_lt
+   * filters (Unix ms) rather than fetching the whole list - used by
+   * reconciliation to search for a ticket that may already exist for a
+   * specific feedback, without the cost of paging through every ticket
+   * ever created as the list grows over time.
+   */
+  async getListTasksCreatedBetween(accessToken: string, listId: string, sinceMs: number, untilMs: number): Promise<ClickupListTask[]> {
+    const all: ClickupListTask[] = [];
+    let page = 0;
+    for (;;) {
+      const res = await fetch(
+        `${CLICKUP_API_BASE}/list/${listId}/task?page=${page}&date_created_gt=${sinceMs}&date_created_lt=${untilMs}&include_closed=true`,
+        { headers: this.authHeaders(accessToken) },
+      );
+      const body = await this.parseJson(res, `fetch tasks for list ${listId} created between ${sinceMs} and ${untilMs}`);
+      const tasks = (body.tasks ?? []) as ClickupListTask[];
+      all.push(...tasks);
+      if (body.last_page || tasks.length === 0) break;
+      page++;
+    }
+    return all;
+  }
+
   async getListFields(accessToken: string, listId: string): Promise<ClickupField[]> {
     const res = await fetch(`${CLICKUP_API_BASE}/list/${listId}/field`, {
       headers: this.authHeaders(accessToken),
