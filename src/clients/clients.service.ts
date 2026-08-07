@@ -24,8 +24,6 @@ export class ClientsService {
         data: {
           clientId,
           clientName: dto.clientName.trim(),
-          contactEmail: dto.contactEmail ?? null,
-          contactPhone: dto.contactPhone ?? null,
           createdBy,
         },
       });
@@ -108,8 +106,6 @@ export class ClientsService {
       where: { id },
       data: {
         ...(dto.clientName !== undefined && { clientName: dto.clientName.trim() }),
-        ...(dto.contactEmail !== undefined && { contactEmail: dto.contactEmail }),
-        ...(dto.contactPhone !== undefined && { contactPhone: dto.contactPhone }),
         ...(dto.status !== undefined && { status: dto.status }),
       },
     });
