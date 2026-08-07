@@ -52,6 +52,7 @@ export class AdminFeedbackService {
         select: {
           id: true,
           businessName: true,
+          address: true,
           slug: true,
           client: { select: { id: true, clientName: true, clientId: true } },
         },
@@ -86,7 +87,7 @@ export class AdminFeedbackService {
     return { data: submissions.map(withMediaUrls), total, page: currentPage, pageSize: size };
   }
 
-  /** Manually re-triggers delivery for a permanently FAILED submission (resets the 5-attempt cycle). */
+  /** Manually re-triggers delivery for a permanently FAILED submission (resets the retry cycle back to attempt 1). */
   async retry(feedbackId: string): Promise<void> {
     await this.integrationJobs.resetForRetry(feedbackId);
   }

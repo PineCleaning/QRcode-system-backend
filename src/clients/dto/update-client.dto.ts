@@ -1,7 +1,4 @@
-import { IsEmail, IsIn, IsOptional, IsString, Matches, MaxLength, MinLength } from 'class-validator';
-
-/** Matches CONTACT_PHONE_PATTERN in create-client.dto.ts and csv-import.service.ts - keep all three in sync. */
-const CONTACT_PHONE_PATTERN = /^[0-9+-]+$/;
+import { IsIn, IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
 
 /** No clientId here - it's immutable after creation (see CreateClientDto). */
 export class UpdateClientDto {
@@ -10,18 +7,6 @@ export class UpdateClientDto {
   @MaxLength(200)
   @IsOptional()
   clientName?: string;
-
-  @IsEmail()
-  @IsOptional()
-  contactEmail?: string;
-
-  @IsString()
-  @MaxLength(32)
-  @Matches(CONTACT_PHONE_PATTERN, {
-    message: 'contactPhone must contain only digits, + and - (e.g. "+61-2-1111-1111")',
-  })
-  @IsOptional()
-  contactPhone?: string;
 
   @IsIn(['ACTIVE', 'INACTIVE'])
   @IsOptional()

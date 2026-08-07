@@ -1,9 +1,17 @@
 import { ConflictException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 
-/** Minutes to wait before each retry, indexed by (failed attempt number - 1). Last entry repeats if somehow exceeded. */
-const BACKOFF_MINUTES = [1, 5, 15, 60, 180];
-export const MAX_DELIVERY_ATTEMPTS = BACKOFF_MINUTES.length;
+/**
+ * Minutes to wait before each retry, indexed by (failed attempt number - 1).
+ * Total attempts = 1 synchronous first attempt + BACKOFF_MINUTES.length
+ * retries - MAX_DELIVERY_ATTEMPTS below reflects that (+1), not just the
+ * array length. (A previous version set MAX_DELIVERY_ATTEMPTS equal to
+ * the array length directly, which made the exhaustion check fire one
+ * attempt early and silently never use the array's last entry - fixed
+ * here so every configured backoff value is actually reachable.)
+ */
+const BACKOFF_MINUTES = [2, 8];
+export const MAX_DELIVERY_ATTEMPTS = BACKOFF_MINUTES.length + 1;
 
 /**
  * Shared success/failure recording for ClickUp ticket-creation jobs,
@@ -85,7 +93,7 @@ export class IntegrationJobsService {
    * Manual retry (admin "Feedbacks" page): only meaningful for a
    * permanently FAILED job - resets the attempt counter back to 0 and
    * marks it due immediately, so the very next EVERY_MINUTE tick of
-   * RetryWorkerService picks it up and runs the exact same 5-attempt
+   * RetryWorkerService picks it up and runs the exact same MAX_DELIVERY_ATTEMPTS-attempt
    * backoff cycle from the start. No changes needed to the worker
    * itself - it already just looks for anything RETRYING and due.
    */

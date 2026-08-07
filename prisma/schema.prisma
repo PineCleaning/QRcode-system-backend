@@ -166,8 +166,6 @@ model Client {
   id              String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   clientId        String           @unique @map("client_id")
   clientName      String           @map("client_name")
-  contactEmail    String?          @map("contact_email")
-  contactPhone    String?          @map("contact_phone")
   status          ClientSiteStatus @default(ACTIVE)
   clickupEntityId String?          @map("clickup_entity_id")
   createdBy       String?          @map("created_by") @db.Uuid

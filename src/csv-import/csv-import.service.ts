@@ -6,7 +6,6 @@ import { PrismaService } from '../prisma/prisma.service';
 
 const MAX_ROWS = 1000; // matches the discovery doc's stated CSV import cap (Section 5.2)
 const CLIENT_CODE_PATTERN = /^[a-zA-Z0-9]+(-[a-zA-Z0-9]+)*$/;
-const CONTACT_PHONE_PATTERN = /^[0-9+-]+$/;
 const MAX_CODE_GENERATION_ATTEMPTS = 5;
 const MAX_SITE_CODE_ATTEMPTS = 5;
 
@@ -22,11 +21,6 @@ const MAX_SITE_CODE_ATTEMPTS = 5;
 const HEADER_ALIASES: Record<string, keyof CsvRow> = {
   'client name': 'clientName',
   'client code': 'clientId',
-  'contact email': 'contactEmail',
-  email: 'contactEmail',
-  'contact phone': 'contactPhone',
-  phone: 'contactPhone',
-  mobile: 'contactPhone',
   'business name': 'businessName',
   'site name': 'businessName',
   location: 'businessName',
@@ -36,8 +30,6 @@ const HEADER_ALIASES: Record<string, keyof CsvRow> = {
 interface CsvRow {
   clientName: string;
   clientId: string;
-  contactEmail: string;
-  contactPhone: string;
   businessName: string;
   address: string;
 }
@@ -120,8 +112,6 @@ export class CsvImportService {
       return {
         clientName: row.clientName ?? '',
         clientId: row.clientId ?? '',
-        contactEmail: row.contactEmail ?? '',
-        contactPhone: row.contactPhone ?? '',
         businessName: row.businessName ?? '',
         address: row.address ?? '',
       };
@@ -133,9 +123,6 @@ export class CsvImportService {
     if (!row.clientName) throw new Error('Client Name is required');
     if (!row.businessName) throw new Error('Business Name is required');
     if (!row.address) throw new Error('Address is required');
-    if (row.contactPhone && !CONTACT_PHONE_PATTERN.test(row.contactPhone)) {
-      throw new Error(`Invalid Contact Phone "${row.contactPhone}" - only digits, + and - are allowed`);
-    }
 
     const client = await this.resolveClient(row);
     const site = await this.resolveSite(client, row);
@@ -155,11 +142,7 @@ export class CsvImportService {
       if (existing) {
         const updated = await this.prisma.client.update({
           where: { id: existing.id },
-          data: {
-            clientName: row.clientName,
-            ...(row.contactEmail && { contactEmail: row.contactEmail }),
-            ...(row.contactPhone && { contactPhone: row.contactPhone }),
-          },
+          data: { clientName: row.clientName },
         });
         return updated;
       }
@@ -173,12 +156,7 @@ export class CsvImportService {
 
   private async createClient(clientId: string, row: CsvRow) {
     return this.prisma.client.create({
-      data: {
-        clientId,
-        clientName: row.clientName,
-        contactEmail: row.contactEmail || null,
-        contactPhone: row.contactPhone || null,
-      },
+      data: { clientId, clientName: row.clientName },
     });
   }
 
