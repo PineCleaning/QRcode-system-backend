@@ -7,6 +7,7 @@ import {
   IsPositive,
   IsString,
   IsUUID,
+  Matches,
   MaxLength,
   MinLength,
   ValidateNested,
@@ -43,7 +44,8 @@ export class CreateFeedbackDto {
   feedback!: string;
 
   @IsString()
-  @MaxLength(32)
+  @Matches(/^\d+$/, { message: 'mobileNumber must contain digits only' })
+  @MaxLength(12)
   @IsOptional()
   mobileNumber?: string;
 
