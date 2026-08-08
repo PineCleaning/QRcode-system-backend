@@ -10,5 +10,6 @@ import { FeedbackReconciliationService } from './feedback-reconciliation.service
   imports: [CloudinaryModule, IntegrationJobsModule, ClickupModule],
   controllers: [AdminFeedbackController],
   providers: [AdminFeedbackService, FeedbackReconciliationService],
+  exports: [AdminFeedbackService],
 })
 export class AdminFeedbackModule {}

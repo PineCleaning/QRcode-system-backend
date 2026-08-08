@@ -1,5 +1,6 @@
 import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '../../generated/prisma/client';
+import { AdminFeedbackService } from '../admin-feedback/admin-feedback.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateClientDto } from './dto/create-client.dto';
 import { UpdateClientDto } from './dto/update-client.dto';
@@ -13,7 +14,10 @@ import { UpdateClientDto } from './dto/update-client.dto';
  */
 @Injectable()
 export class ClientsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly adminFeedback: AdminFeedbackService,
+  ) {}
 
   async create(dto: CreateClientDto, createdBy: string) {
     const clientId = dto.clientId.trim().toLowerCase();
@@ -113,17 +117,45 @@ export class ClientsService {
     return this.findOne(id);
   }
 
-  /** Hard delete. Blocked at the DB level (ON DELETE RESTRICT via sites -> feedback_submissions) if any site under this client has feedback history. */
+  /**
+   * Hard delete - the client, every site under it, and every feedback
+   * submission on those sites (with attachments), all permanently
+   * removed from the database. Deliberately NOT a plain
+   * `prisma.client.delete()` - the DB's own ON DELETE RESTRICT (sites ->
+   * feedback_submissions) exists specifically to stop an accidental
+   * delete-with-history, so a full wipe has to explicitly clear
+   * feedback first, in the same order the database would require
+   * anyway.
+   *
+   * Each feedback row is deleted via AdminFeedbackService.remove() -
+   * the exact same method the single-feedback "Delete" button on the
+   * Feedback page already uses - so ClickUp ticket deletion and
+   * Cloudinary attachment cleanup are handled identically here, both
+   * best-effort (a ClickUp/Cloudinary failure is logged, never blocks
+   * the delete). The client's ClickUp Company record is never touched
+   * either way - this service has never written to the Companies list.
+   */
   async remove(id: string) {
     await this.findOne(id); // 404s if missing
+
+    const sites = await this.prisma.site.findMany({ where: { clientCode: id }, select: { id: true } });
+
+    for (const site of sites) {
+      const feedback = await this.prisma.feedbackSubmission.findMany({ where: { siteId: site.id }, select: { id: true } });
+      for (const item of feedback) {
+        await this.adminFeedback.remove(item.id);
+      }
+    }
+
+    await this.prisma.site.deleteMany({ where: { clientCode: id } });
 
     try {
       await this.prisma.client.delete({ where: { id } });
     } catch (err) {
+      // Defensive fallback only - every site/feedback row above is
+      // already gone by this point, so RESTRICT shouldn't fire again.
       if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2003') {
-        throw new ConflictException(
-          'Cannot delete this client: one or more of its sites have feedback history. Deactivate the client instead (PUT with status: INACTIVE).',
-        );
+        throw new ConflictException('Cannot delete this client: some of its data could not be cleared first.');
       }
       throw err;
     }
