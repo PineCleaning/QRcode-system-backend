@@ -57,12 +57,22 @@ export class FeedbackService {
     let totalVerifiedBytes = 0;
     let verifiedVideoCount = 0;
 
-    for (const item of dto.media ?? []) {
+    // Each item's Cloudinary verification is an independent network call -
+    // running them in parallel instead of one at a time in a for-loop turns
+    // N sequential round-trips into the cost of the single slowest one.
+    // The per-item accumulator checks below (total bytes, video count)
+    // still run in submission order afterward, so limits are enforced
+    // deterministically regardless of which verify call happens to finish
+    // first.
+    const resources = await Promise.all(
+      (dto.media ?? []).map((item) =>
+        this.cloudinary.verifyResource(item.cloudinaryPublicId, item.resourceType.toLowerCase() as 'image' | 'video'),
+      ),
+    );
+
+    (dto.media ?? []).forEach((item, index) => {
       const resourceTypeLower = item.resourceType.toLowerCase() as 'image' | 'video';
-      // Trust nothing the client claimed about the file beyond its
-      // public_id - verifyResource() fetches the real format/bytes from
-      // Cloudinary itself, which is what every check below runs against.
-      const resource = await this.cloudinary.verifyResource(item.cloudinaryPublicId, resourceTypeLower);
+      const resource = resources[index];
 
       let reason: string | null = null;
       if (!resource) {
@@ -95,7 +105,7 @@ export class FeedbackService {
         sizeBytes: item.sizeBytes,
         status: reason ? ('REJECTED' as const) : ('VERIFIED' as const),
       });
-    }
+    });
 
     const submission = await this.prisma.feedbackSubmission.create({
       data: {
