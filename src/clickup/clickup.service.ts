@@ -44,9 +44,13 @@ export interface TicketInput {
  * lookup (see ClickupService.findCompanyByName, added alongside this
  * change) rather than something this service ever creates or edits.
  */
+/** How long a "no matching Company found" result is trusted before resolveClientEntityId re-fetches the Companies list for that client. A real match is cached permanently on the client row (clickupEntityId) - this only bounds the cost of a client that has no match yet, so a burst of feedback from the same unlinked client doesn't re-fetch the whole Companies list on every single one, while still picking up a Company added in ClickUp within a few minutes without needing a restart. */
+const NO_MATCH_CACHE_TTL_MS = 5 * 60 * 1000;
+
 @Injectable()
 export class ClickupService {
   private readonly logger = new Logger(ClickupService.name);
+  private readonly noMatchCache = new Map<string, number>();
 
   constructor(
     private readonly api: ClickupApiClient,
@@ -133,6 +137,11 @@ export class ClickupService {
   private async resolveClientEntityId(client: TicketClient): Promise<string | null> {
     if (client.clickupEntityId) return client.clickupEntityId;
 
+    const cachedMissAt = this.noMatchCache.get(client.id);
+    if (cachedMissAt !== undefined && Date.now() - cachedMissAt < NO_MATCH_CACHE_TTL_MS) {
+      return null;
+    }
+
     const { connection, accessToken } = await this.connections.getReadyConnection();
     const companies = await this.api.getListTasks(accessToken, connection.companiesListId!);
 
@@ -149,6 +158,7 @@ export class ClickupService {
         this.logger.warn(
           `Client ${client.id} (${client.clientId}) matched ${byClientId.length} Companies by CLIENT ID - ambiguous, leaving ticket unlinked.`,
         );
+        this.noMatchCache.set(client.id, Date.now());
         return null;
       }
       // No CLIENT ID match - fall through to name matching below.
@@ -163,6 +173,7 @@ export class ClickupService {
         `Client ${client.id} ("${client.clientName}") matched ${byName.length} Companies by name - ambiguous, leaving ticket unlinked.`,
       );
     }
+    this.noMatchCache.set(client.id, Date.now());
     return null;
   }
 
