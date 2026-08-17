@@ -35,17 +35,44 @@ export class RetryWorkerService {
 
     for (const job of due) {
       const nextAttemptCount = job.attemptCount + 1;
+      // True on exactly the first retry-worker-driven attempt for this job
+      // - either right after the synchronous initial attempt failed
+      // (attemptCount 1 -> 2) or right after a manual Retry-button reset
+      // (attemptCount 0 -> 1). Guards against the case where a prior
+      // attempt actually created the ClickUp ticket but we never found
+      // out (a timeout right as it succeeded, a process crash between
+      // ClickUp confirming and our own recordSuccess() write, etc.) -
+      // reuses the same search-by-title-and-time-window lookup already
+      // proven in FeedbackReconciliationService's stuck-job recovery,
+      // instead of blindly calling createTicket() and risking a
+      // duplicate. Deliberately scoped to just the first retry attempt,
+      // not every one.
+      const isFirstRetryAttempt = job.attemptCount <= 1;
+
       try {
-        const clickupTaskId = await this.clickup.createTicket({
-          client: job.feedback.site.client,
-          businessName: job.feedback.site.businessName,
-          address: job.feedback.site.address,
-          feedback: job.feedback.feedback,
-          mobileNumber: job.feedback.mobileNumber,
-          media: job.feedback.media
-            .filter((m) => m.status === 'VERIFIED')
-            .map((m) => ({ cloudinaryPublicId: m.cloudinaryPublicId, resourceType: m.resourceType })),
-        });
+        let clickupTaskId: string | null = null;
+
+        if (isFirstRetryAttempt) {
+          clickupTaskId = await this.clickup.findExistingTicketForFeedback(
+            job.feedback.site.client.clientName,
+            job.feedback.site.businessName,
+            job.feedback.submittedAt,
+          );
+        }
+
+        if (!clickupTaskId) {
+          clickupTaskId = await this.clickup.createTicket({
+            client: job.feedback.site.client,
+            businessName: job.feedback.site.businessName,
+            address: job.feedback.site.address,
+            feedback: job.feedback.feedback,
+            mobileNumber: job.feedback.mobileNumber,
+            media: job.feedback.media
+              .filter((m) => m.status === 'VERIFIED')
+              .map((m) => ({ cloudinaryPublicId: m.cloudinaryPublicId, resourceType: m.resourceType })),
+          });
+        }
+
         await this.jobs.recordSuccess(job.id, job.feedbackId, clickupTaskId);
       } catch (err) {
         await this.jobs.recordFailure(job.id, job.feedbackId, nextAttemptCount, err);
