@@ -10,7 +10,7 @@ import { PrismaService } from '../prisma/prisma.service';
  * attempt early and silently never use the array's last entry - fixed
  * here so every configured backoff value is actually reachable.)
  */
-const BACKOFF_MINUTES = [2, 8];
+const BACKOFF_MINUTES = [1.5, 1.5];
 export const MAX_DELIVERY_ATTEMPTS = BACKOFF_MINUTES.length + 1;
 
 /**

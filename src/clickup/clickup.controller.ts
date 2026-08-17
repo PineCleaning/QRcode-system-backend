@@ -3,9 +3,11 @@ import { ConfigService } from '@nestjs/config';
 import type { AdminUser } from '../../generated/prisma/client';
 import { CurrentAdmin } from '../auth/current-admin.decorator';
 import { SupabaseAuthGuard } from '../auth/supabase-auth.guard';
-import { ClickupApiClient } from './clickup-api.client';
+import { ClickupApiClient, type ClickupTeam } from './clickup-api.client';
 import { ClickupConnectionService } from './clickup-connection.service';
+import { ReconnectClickupDto } from './dto/reconnect-clickup.dto';
 import { SetupClickupDto } from './dto/setup-clickup.dto';
+import { RailwayEnvSyncService } from './railway-env-sync.service';
 
 const DEFAULT_CLIENT_FIELD_NAME = 'CLIENT NAME';
 const DEFAULT_REQUEST_DETAILS_FIELD_NAME = 'REQUEST DETAILS';
@@ -19,6 +21,7 @@ export class ClickupController {
     private readonly api: ClickupApiClient,
     private readonly connections: ClickupConnectionService,
     private readonly config: ConfigService,
+    private readonly railwaySync: RailwayEnvSyncService,
   ) {}
 
   /** Step 1: admin calls this (guarded), gets a URL to send the browser to. */
@@ -149,19 +152,28 @@ export class ClickupController {
     };
   }
 
+  /**
+   * Unlike the other guarded routes here, this reads the latest
+   * connection regardless of status (not just CONNECTED) - a
+   * disconnected admin still needs to see *which* workspace and *why*,
+   * to drive both the dashboard banner and the /settings/clickup guide.
+   */
   @Get('status')
   @UseGuards(SupabaseAuthGuard)
   async status() {
-    const existing = await this.connections.getAnyConnection();
-    if (!existing) {
-      return { connected: false };
+    const connection = await this.connections.getLatestConnectionRecord();
+    if (!connection) {
+      return { connected: false, needsReconnect: false, railwaySyncConfigured: this.railwaySync.isConfigured() };
     }
-    const { connection } = existing;
     return {
-      connected: true,
+      connected: connection.status === 'CONNECTED',
+      needsReconnect: connection.status === 'RECONNECT_REQUIRED',
       workspaceId: connection.workspaceId,
       workspaceName: connection.workspaceName,
       status: connection.status,
+      lastErrorMessage: connection.lastErrorMessage,
+      disconnectedAt: connection.disconnectedAt,
+      railwaySyncConfigured: this.railwaySync.isConfigured(),
       configured: Boolean(
         connection.ticketsListId &&
           connection.companiesListId &&
@@ -177,6 +189,60 @@ export class ClickupController {
       requestTypeFieldId: connection.requestTypeFieldId,
       requestTypeOtherOptionId: connection.requestTypeOtherOptionId,
       companyClientIdFieldId: connection.companyClientIdFieldId,
+    };
+  }
+
+  /**
+   * Self-service recovery for the "personal token got revoked/regenerated
+   * in ClickUp" case (ClickupAuthError flips the connection to
+   * RECONNECT_REQUIRED elsewhere - see ClickupService.runClickupCall).
+   * An admin regenerates a token in ClickUp and pastes it here instead of
+   * an engineer editing Railway env vars. Validates the token actually
+   * works and is authorized for the *same* workspace already on file
+   * (never silently reconnects to a different workspace) before storing
+   * it - reusing upsertConnection() flips status back to CONNECTED and
+   * clears lastErrorMessage/disconnectedAt.
+   */
+  @Post('reconnect-token')
+  @UseGuards(SupabaseAuthGuard)
+  async reconnectToken(@Body() dto: ReconnectClickupDto, @CurrentAdmin() admin: AdminUser) {
+    let teams: ClickupTeam[];
+    try {
+      teams = await this.api.getAuthorizedTeams(dto.token);
+    } catch {
+      throw new BadRequestException('That token was rejected by ClickUp - double-check you copied the whole thing.');
+    }
+    if (teams.length === 0) {
+      throw new BadRequestException('That token is not authorized for any ClickUp workspace.');
+    }
+
+    const existing = await this.connections.getLatestConnectionRecord();
+    const team = existing ? teams.find((t) => t.id === existing.workspaceId) : teams[0];
+    if (!team) {
+      const authorized = teams.map((t) => `${t.name} (${t.id})`).join(', ');
+      throw new BadRequestException(
+        `This token isn't authorized for the connected workspace (${existing?.workspaceName ?? existing?.workspaceId}). It's authorized for: ${authorized}. Make sure you generated it from the same ClickUp account.`,
+      );
+    }
+
+    const connection = await this.connections.upsertConnection({
+      workspaceId: team.id,
+      workspaceName: team.name ?? null,
+      accessToken: dto.token,
+      connectedBy: admin.id,
+    });
+
+    // Best-effort - the DB write above already made ClickUp work again;
+    // a Railway hiccup here must never fail this response (see
+    // RailwayEnvSyncService's class comment for why this exists at all).
+    const railway = await this.railwaySync.syncClickupToken(dto.token);
+
+    return {
+      connected: true,
+      needsReconnect: false,
+      workspaceId: connection.workspaceId,
+      workspaceName: connection.workspaceName,
+      railway,
     };
   }
 }

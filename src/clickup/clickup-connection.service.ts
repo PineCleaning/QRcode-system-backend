@@ -117,8 +117,32 @@ export class ClickupConnectionService implements OnModuleInit {
         status: 'CONNECTED',
         connectedBy: params.connectedBy,
         connectedAt: new Date(),
+        lastErrorMessage: null,
+        disconnectedAt: null,
       },
     });
+  }
+
+  /**
+   * Flips a connection to RECONNECT_REQUIRED after an auth-class ClickUp
+   * failure (ClickupAuthError - 401 / ECODE OAUTH_025 "Token invalid").
+   * Called once, from ClickupService.runClickupCall, so every ClickUp
+   * caller in the app (feedback delivery, retry worker, reconciliation,
+   * admin ticket delete) reports this the moment it happens instead of
+   * just logging a warning forever - the gap that let the last outage
+   * run silently for 3+ days. `updateMany` + the `status: 'CONNECTED'`
+   * guard avoids downgrading a connection that was already reconnected
+   * (e.g. by a concurrent admin submitting a fresh token) moments
+   * before this call lands.
+   */
+  async markReconnectRequired(workspaceId: string, lastError: string): Promise<void> {
+    const { count } = await this.prisma.clickupConnection.updateMany({
+      where: { workspaceId, status: 'CONNECTED' },
+      data: { status: 'RECONNECT_REQUIRED', lastErrorMessage: lastError, disconnectedAt: new Date() },
+    });
+    if (count > 0) {
+      this.logger.error(`ClickUp connection ${workspaceId} needs reconnect: ${lastError}`);
+    }
   }
 
   async setListConfig(params: {
@@ -179,5 +203,18 @@ export class ClickupConnectionService implements OnModuleInit {
     });
     if (!connection) return null;
     return { connection, accessToken: decryptToken(connection.encryptedAccessToken, this.encryptionKey) };
+  }
+
+  /**
+   * Returns the most recent connection row regardless of status
+   * (including RECONNECT_REQUIRED) - unlike getAnyConnection/
+   * getReadyConnection above, which only ever look at CONNECTED rows.
+   * Used by GET /clickup/status (so a disconnected admin still sees
+   * *which* workspace and why) and POST /clickup/reconnect-token (so a
+   * freshly submitted token can be checked against the right
+   * workspace). Never decrypts/returns the access token.
+   */
+  async getLatestConnectionRecord(): Promise<ClickupConnection | null> {
+    return this.prisma.clickupConnection.findFirst({ orderBy: { connectedAt: 'desc' } });
   }
 }

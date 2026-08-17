@@ -5,11 +5,12 @@ import { ClickupApiClient } from './clickup-api.client';
 import { ClickupConnectionService } from './clickup-connection.service';
 import { ClickupController } from './clickup.controller';
 import { ClickupService } from './clickup.service';
+import { RailwayEnvSyncService } from './railway-env-sync.service';
 
 @Module({
   imports: [AuthModule, CloudinaryModule],
   controllers: [ClickupController],
-  providers: [ClickupApiClient, ClickupConnectionService, ClickupService],
+  providers: [ClickupApiClient, ClickupConnectionService, ClickupService, RailwayEnvSyncService],
   exports: [ClickupService],
 })
 export class ClickupModule {}
