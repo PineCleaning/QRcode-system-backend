@@ -3,10 +3,11 @@ import { ConfigService } from '@nestjs/config';
 import type { AdminUser } from '../../generated/prisma/client';
 import { CurrentAdmin } from '../auth/current-admin.decorator';
 import { SupabaseAuthGuard } from '../auth/supabase-auth.guard';
-import { ClickupApiClient } from './clickup-api.client';
+import { ClickupApiClient, type ClickupTeam } from './clickup-api.client';
 import { ClickupConnectionService } from './clickup-connection.service';
 import { ReconnectClickupDto } from './dto/reconnect-clickup.dto';
 import { SetupClickupDto } from './dto/setup-clickup.dto';
+import { RailwayEnvSyncService } from './railway-env-sync.service';
 
 const DEFAULT_CLIENT_FIELD_NAME = 'CLIENT NAME';
 const DEFAULT_REQUEST_DETAILS_FIELD_NAME = 'REQUEST DETAILS';
@@ -20,6 +21,7 @@ export class ClickupController {
     private readonly api: ClickupApiClient,
     private readonly connections: ClickupConnectionService,
     private readonly config: ConfigService,
+    private readonly railwaySync: RailwayEnvSyncService,
   ) {}
 
   /** Step 1: admin calls this (guarded), gets a URL to send the browser to. */
@@ -161,7 +163,7 @@ export class ClickupController {
   async status() {
     const connection = await this.connections.getLatestConnectionRecord();
     if (!connection) {
-      return { connected: false, needsReconnect: false };
+      return { connected: false, needsReconnect: false, railwaySyncConfigured: this.railwaySync.isConfigured() };
     }
     return {
       connected: connection.status === 'CONNECTED',
@@ -171,6 +173,7 @@ export class ClickupController {
       status: connection.status,
       lastErrorMessage: connection.lastErrorMessage,
       disconnectedAt: connection.disconnectedAt,
+      railwaySyncConfigured: this.railwaySync.isConfigured(),
       configured: Boolean(
         connection.ticketsListId &&
           connection.companiesListId &&
@@ -203,7 +206,7 @@ export class ClickupController {
   @Post('reconnect-token')
   @UseGuards(SupabaseAuthGuard)
   async reconnectToken(@Body() dto: ReconnectClickupDto, @CurrentAdmin() admin: AdminUser) {
-    let teams;
+    let teams: ClickupTeam[];
     try {
       teams = await this.api.getAuthorizedTeams(dto.token);
     } catch {
@@ -229,6 +232,17 @@ export class ClickupController {
       connectedBy: admin.id,
     });
 
-    return { connected: true, needsReconnect: false, workspaceId: connection.workspaceId, workspaceName: connection.workspaceName };
+    // Best-effort - the DB write above already made ClickUp work again;
+    // a Railway hiccup here must never fail this response (see
+    // RailwayEnvSyncService's class comment for why this exists at all).
+    const railway = await this.railwaySync.syncClickupToken(dto.token);
+
+    return {
+      connected: true,
+      needsReconnect: false,
+      workspaceId: connection.workspaceId,
+      workspaceName: connection.workspaceName,
+      railway,
+    };
   }
 }
