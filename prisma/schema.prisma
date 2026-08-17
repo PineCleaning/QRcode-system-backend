@@ -153,6 +153,13 @@ model ClickupConnection {
   /// its Company by this value (our unique client_id) instead of by name
   /// avoids ambiguity when two records share the same name.
   companyClientIdFieldId   String?                 @map("company_client_id_field_id")
+  /// Set when an auth-class ClickUp failure (401 / ECODE OAUTH_025 "Token
+  /// invalid") flips status to RECONNECT_REQUIRED - shown to the admin in
+  /// the reconnect guide. Cleared back to null on a successful reconnect.
+  lastErrorMessage         String?                 @map("last_error_message")
+  /// When this connection was flipped to RECONNECT_REQUIRED. Cleared back
+  /// to null on a successful reconnect.
+  disconnectedAt           DateTime?               @map("disconnected_at")
   connectedBy              String?                 @map("connected_by") @db.Uuid
   connectedByUser          AdminUser?              @relation(fields: [connectedBy], references: [id])
   connectedAt              DateTime                @default(now()) @map("connected_at")

@@ -1,7 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { CloudinaryService } from '../cloudinary/cloudinary.service';
 import { PrismaService } from '../prisma/prisma.service';
-import { ClickupApiClient } from './clickup-api.client';
+import { ClickupApiClient, ClickupAuthError } from './clickup-api.client';
 import { ClickupConnectionService } from './clickup-connection.service';
 
 interface TicketClient {
@@ -60,6 +60,25 @@ export class ClickupService {
   ) {}
 
   /**
+   * Every ClickUp API call in this service goes through here. On an
+   * auth-class failure (ClickupAuthError - the token was revoked or
+   * regenerated in ClickUp), flips the connection to RECONNECT_REQUIRED
+   * before rethrowing, so it's caught exactly once no matter which of
+   * this service's public methods triggered it - callers keep their
+   * existing try/catch and retry/backoff behavior unchanged.
+   */
+  private async runClickupCall<T>(workspaceId: string, fn: () => Promise<T>): Promise<T> {
+    try {
+      return await fn();
+    } catch (err) {
+      if (err instanceof ClickupAuthError) {
+        await this.connections.markReconnectRequired(workspaceId, err.message);
+      }
+      throw err;
+    }
+  }
+
+  /**
    * Creates a Task in the TICKETS list for a feedback submission.
    * Request Type and Request Details are set directly on creation (both
    * text/dropdown fields, reliably supported in ClickUp's bulk
@@ -84,20 +103,24 @@ export class ClickupService {
   async createTicket(input: TicketInput): Promise<string> {
     const { connection, accessToken } = await this.connections.getReadyConnection();
 
-    const task = await this.api.createTask(accessToken, connection.ticketsListId!, {
-      name: `${input.client.clientName} — ${input.businessName}`,
-      custom_fields: [
-        { id: connection.requestDetailsFieldId!, value: this.buildRequestDetails(input) },
-        { id: connection.requestTypeFieldId!, value: connection.requestTypeOtherOptionId! },
-      ],
-    });
+    const task = await this.runClickupCall(connection.workspaceId, () =>
+      this.api.createTask(accessToken, connection.ticketsListId!, {
+        name: `${input.client.clientName} — ${input.businessName}`,
+        custom_fields: [
+          { id: connection.requestDetailsFieldId!, value: this.buildRequestDetails(input) },
+          { id: connection.requestTypeFieldId!, value: connection.requestTypeOtherOptionId! },
+        ],
+      }),
+    );
 
     const clientEntityId = await this.resolveClientEntityId(input.client);
     if (clientEntityId) {
       try {
-        await this.api.setCustomFieldValue(accessToken, task.id, connection.clientFieldId!, {
-          add: [clientEntityId],
-        });
+        await this.runClickupCall(connection.workspaceId, () =>
+          this.api.setCustomFieldValue(accessToken, task.id, connection.clientFieldId!, {
+            add: [clientEntityId],
+          }),
+        );
       } catch (err) {
         this.logger.warn(
           `Ticket ${task.id} created but failed to link Company ${clientEntityId} via the CLIENT NAME field: ${err instanceof Error ? err.message : err}`,
@@ -143,7 +166,9 @@ export class ClickupService {
     }
 
     const { connection, accessToken } = await this.connections.getReadyConnection();
-    const companies = await this.api.getListTasks(accessToken, connection.companiesListId!);
+    const companies = await this.runClickupCall(connection.workspaceId, () =>
+      this.api.getListTasks(accessToken, connection.companiesListId!),
+    );
 
     if (connection.companyClientIdFieldId) {
       const byClientId = companies.filter((c) => {
@@ -195,7 +220,9 @@ export class ClickupService {
     const since = submittedAt.getTime() - windowMs;
     const until = submittedAt.getTime() + windowMs;
 
-    const tasks = await this.api.getListTasksCreatedBetween(accessToken, connection.ticketsListId!, since, until);
+    const tasks = await this.runClickupCall(connection.workspaceId, () =>
+      this.api.getListTasksCreatedBetween(accessToken, connection.ticketsListId!, since, until),
+    );
     const expectedName = `${clientName} — ${businessName}`;
     const matches = tasks.filter((t) => t.name === expectedName);
 
@@ -215,15 +242,15 @@ export class ClickupService {
 
   /** Used by the reconciliation worker to detect a ticket deleted directly in ClickUp (not through this app). */
   async ticketExists(taskId: string): Promise<boolean> {
-    const { accessToken } = await this.connections.getReadyConnection();
-    const task = await this.api.getTask(accessToken, taskId);
+    const { connection, accessToken } = await this.connections.getReadyConnection();
+    const task = await this.runClickupCall(connection.workspaceId, () => this.api.getTask(accessToken, taskId));
     return task !== null;
   }
 
   /** Best-effort - deleting a ticket that's already gone is treated as success, not an error, so callers can call this unconditionally without checking existence first. */
   async deleteTicket(taskId: string): Promise<void> {
-    const { accessToken } = await this.connections.getReadyConnection();
-    await this.api.deleteTask(accessToken, taskId);
+    const { connection, accessToken } = await this.connections.getReadyConnection();
+    await this.runClickupCall(connection.workspaceId, () => this.api.deleteTask(accessToken, taskId));
   }
 
   private async cacheMatch(clientId: string, clickupEntityId: string): Promise<string> {

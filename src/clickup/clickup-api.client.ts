@@ -41,6 +41,20 @@ export interface ClickupListTask {
 }
 
 /**
+ * Thrown specifically for an auth-class ClickUp failure (401, or
+ * ECODE OAUTH_025 "Token invalid") - distinguished from every other
+ * failure (404, rate limit, timeout, 5xx) so callers can tell "the
+ * token was revoked/regenerated, an admin needs to reconnect" apart
+ * from a transient error that's safe to just retry.
+ */
+export class ClickupAuthError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ClickupAuthError';
+  }
+}
+
+/**
  * Thin wrapper around the raw ClickUp REST API (v2). No business logic here -
  * that lives in ClickupService. Never creates Lists/Folders/Spaces/custom
  * fields - only reads and writes to structure that already exists.
@@ -188,6 +202,15 @@ export class ClickupApiClient {
     }, `delete task ${taskId}`);
     if (res.status === 404 || res.ok) return;
     const text = await res.text();
+    let ecode: string | undefined;
+    try {
+      ecode = text ? JSON.parse(text)?.ECODE : undefined;
+    } catch {
+      // non-JSON body - fall through, status code alone still detects auth failures
+    }
+    if (res.status === 401 || ecode === 'OAUTH_025') {
+      throw new ClickupAuthError(`ClickUp API error while trying to delete task ${taskId}: ${text || res.statusText}`);
+    }
     throw new InternalServerErrorException(`ClickUp API error while trying to delete task ${taskId}: ${text || res.statusText}`);
   }
 
@@ -228,6 +251,9 @@ export class ClickupApiClient {
     }
     if (!res.ok) {
       const message = body?.err ?? res.statusText;
+      if (res.status === 401 || body?.ECODE === 'OAUTH_025') {
+        throw new ClickupAuthError(`ClickUp API error while trying to ${action}: ${message}`);
+      }
       throw new InternalServerErrorException(`ClickUp API error while trying to ${action}: ${message}`);
     }
     return body;
