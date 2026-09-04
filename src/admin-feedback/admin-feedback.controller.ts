@@ -1,10 +1,12 @@
 import { Controller, Delete, Get, HttpCode, Param, Post, Query, UseGuards } from '@nestjs/common';
+import { Roles } from '../auth/roles.decorator';
+import { RolesGuard } from '../auth/roles.guard';
 import { SupabaseAuthGuard } from '../auth/supabase-auth.guard';
 import { AdminFeedbackService } from './admin-feedback.service';
 import { FindAllFeedbackQueryDto } from './dto/find-all-feedback-query.dto';
 
 @Controller('admin/feedback')
-@UseGuards(SupabaseAuthGuard)
+@UseGuards(SupabaseAuthGuard, RolesGuard)
 export class AdminFeedbackController {
   constructor(private readonly service: AdminFeedbackService) {}
 
@@ -20,6 +22,7 @@ export class AdminFeedbackController {
   }
 
   @Delete(':id')
+  @Roles('ADMIN')
   @HttpCode(204)
   remove(@Param('id') id: string) {
     return this.service.remove(id);
