@@ -4,6 +4,7 @@ import { ScheduleModule } from '@nestjs/schedule';
 import { ThrottlerModule } from '@nestjs/throttler';
 import { AdminFeedbackModule } from './admin-feedback/admin-feedback.module';
 import { AdminMediaModule } from './admin-media/admin-media.module';
+import { AdminUsersModule } from './admin-users/admin-users.module';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { AuthModule } from './auth/auth.module';
@@ -47,6 +48,7 @@ import { SupabaseModule } from './supabase/supabase.module';
     IntegrationJobsModule,
     AdminFeedbackModule,
     AdminMediaModule,
+    AdminUsersModule,
     CsvImportModule,
   ],
   controllers: [AppController, HealthController],

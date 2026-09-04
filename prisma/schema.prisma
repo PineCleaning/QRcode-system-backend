@@ -33,6 +33,13 @@ enum AdminStatus {
   @@map("admin_status")
 }
 
+enum AdminRole {
+  ADMIN
+  SUPERVISOR
+
+  @@map("admin_role")
+}
+
 enum ClickupConnectionStatus {
   CONNECTED
   DISCONNECTED
@@ -105,9 +112,10 @@ model AdminUser {
   id        String      @id @db.Uuid
   email     String      @unique
   fullName  String?     @map("full_name")
-  role      String      @default("admin")
+  role      AdminRole   @default(ADMIN)
   status    AdminStatus @default(ACTIVE)
   createdAt DateTime    @default(now()) @map("created_at")
+  lastLoginAt DateTime? @map("last_login_at")
 
   clientsCreated     Client[]            @relation("ClientCreatedBy")
   clickupConnections ClickupConnection[]
