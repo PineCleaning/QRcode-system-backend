@@ -3,16 +3,10 @@ import { Request } from 'express';
 import type { AdminUser } from '../../generated/prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { SupabaseService } from '../supabase/supabase.service';
+import { AuthCacheService } from './auth-cache.service';
 
 export interface AuthenticatedRequest extends Request {
   adminUser: AdminUser;
-}
-
-const CACHE_TTL_MS = 30_000;
-
-interface CacheEntry {
-  adminUser: AdminUser;
-  expiresAt: number;
 }
 
 @Injectable()
@@ -39,13 +33,18 @@ export class SupabaseAuthGuard implements CanActivate {
    * each independently pay the full Supabase+DB verification cost;
    * with it, they share one real verification and the rest just await
    * the same in-flight promise.
+   *
+   * The cache itself lives in AuthCacheService, not a private field
+   * here - AdminUsersService needs to invalidate a specific user's
+   * cached entries when their role/status changes, and it can only do
+   * that against a cache it can actually reach via DI.
    */
-  private readonly cache = new Map<string, CacheEntry>();
   private readonly inFlight = new Map<string, Promise<AdminUser>>();
 
   constructor(
     private readonly supabase: SupabaseService,
     private readonly prisma: PrismaService,
+    private readonly authCache: AuthCacheService,
   ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
@@ -55,9 +54,9 @@ export class SupabaseAuthGuard implements CanActivate {
       throw new UnauthorizedException('Missing bearer token');
     }
 
-    const cached = this.cache.get(token);
-    if (cached && cached.expiresAt > Date.now()) {
-      request.adminUser = cached.adminUser;
+    const cached = this.authCache.get(token);
+    if (cached) {
+      request.adminUser = cached;
       return true;
     }
 
@@ -90,17 +89,8 @@ export class SupabaseAuthGuard implements CanActivate {
       throw new UnauthorizedException('Not an active admin user');
     }
 
-    this.cache.set(token, { adminUser, expiresAt: Date.now() + CACHE_TTL_MS });
-    this.pruneExpired();
+    this.authCache.set(token, adminUser);
     return adminUser;
-  }
-
-  /** Tokens rotate (Supabase refresh) and old ones are never reused again - without this the map would grow forever over a long-running process. Runs on every cache miss, which is cheap at this app's scale. */
-  private pruneExpired(): void {
-    const now = Date.now();
-    for (const [key, entry] of this.cache) {
-      if (entry.expiresAt <= now) this.cache.delete(key);
-    }
   }
 
   private extractToken(request: Request): string | null {

@@ -28,4 +28,26 @@ export class SupabaseService {
     }
     return data.claims;
   }
+
+  /** Admin API - creates a real Supabase Auth account, pre-confirmed (no email-verification step). Used by AdminUsersService when provisioning a new admin/supervisor. */
+  async createAuthUser(email: string, password: string): Promise<{ id: string }> {
+    const { data, error } = await this.client.auth.admin.createUser({ email, password, email_confirm: true });
+    if (error || !data?.user) {
+      throw new Error(error?.message ?? 'Failed to create Supabase Auth user');
+    }
+    return { id: data.user.id };
+  }
+
+  /** Admin API - rollback path: deletes an Auth account that was just created if the follow-up admin_users insert fails, so a failed create never leaves an orphaned Auth-only account. */
+  async deleteAuthUser(id: string): Promise<void> {
+    await this.client.auth.admin.deleteUser(id);
+  }
+
+  /** Admin API - overwrites a user's password immediately. Used by AdminUsersService.resetPassword; the old password stops working the instant this call succeeds. */
+  async updateUserPassword(id: string, password: string): Promise<void> {
+    const { error } = await this.client.auth.admin.updateUserById(id, { password });
+    if (error) {
+      throw new Error(error.message);
+    }
+  }
 }

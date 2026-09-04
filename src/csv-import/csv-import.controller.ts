@@ -2,15 +2,18 @@ import { BadRequestException, Controller, Post, UploadedFile, UseGuards, UseInte
 import { FileInterceptor } from '@nestjs/platform-express';
 import type { AdminUser } from '../../generated/prisma/client';
 import { CurrentAdmin } from '../auth/current-admin.decorator';
+import { Roles } from '../auth/roles.decorator';
+import { RolesGuard } from '../auth/roles.guard';
 import { SupabaseAuthGuard } from '../auth/supabase-auth.guard';
 import { CsvImportService } from './csv-import.service';
 
 @Controller('clients')
-@UseGuards(SupabaseAuthGuard)
+@UseGuards(SupabaseAuthGuard, RolesGuard)
 export class CsvImportController {
   constructor(private readonly service: CsvImportService) {}
 
   @Post('bulk-upload')
+  @Roles('ADMIN')
   @UseInterceptors(FileInterceptor('file'))
   async bulkUpload(@UploadedFile() file: Express.Multer.File, @CurrentAdmin() admin: AdminUser) {
     if (!file) {

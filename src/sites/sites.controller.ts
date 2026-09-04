@@ -1,5 +1,7 @@
 import { Body, Controller, Delete, Get, HttpCode, Param, Post, Put, Query, Req, Res, UseGuards } from '@nestjs/common';
 import type { Request, Response } from 'express';
+import { Roles } from '../auth/roles.decorator';
+import { RolesGuard } from '../auth/roles.guard';
 import { SupabaseAuthGuard } from '../auth/supabase-auth.guard';
 import { QrService } from '../qr/qr.service';
 import { DownloadQrQueryDto } from './dto/download-qr-query.dto';
@@ -9,7 +11,7 @@ import { UpdateSiteDto } from './dto/update-site.dto';
 import { SitesService } from './sites.service';
 
 @Controller()
-@UseGuards(SupabaseAuthGuard)
+@UseGuards(SupabaseAuthGuard, RolesGuard)
 export class SitesController {
   constructor(
     private readonly sites: SitesService,
@@ -17,6 +19,7 @@ export class SitesController {
   ) {}
 
   @Post('clients/:clientCode/sites')
+  @Roles('ADMIN')
   create(@Param('clientCode') clientCode: string, @Body() dto: CreateSiteDto) {
     return this.sites.create(clientCode, dto);
   }
@@ -32,11 +35,13 @@ export class SitesController {
   }
 
   @Put('sites/:id')
+  @Roles('ADMIN')
   update(@Param('id') id: string, @Body() dto: UpdateSiteDto) {
     return this.sites.update(id, dto);
   }
 
   @Delete('sites/:id')
+  @Roles('ADMIN')
   @HttpCode(204)
   remove(@Param('id') id: string) {
     return this.sites.remove(id);
