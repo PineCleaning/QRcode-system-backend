@@ -42,6 +42,47 @@ enum AdminRole {
   @@map("admin_role")
 }
 
+enum InventoryStatus {
+  IN_STOCK
+  LOW_STOCK
+  URGENT_LOW_STOCK
+  OUT_OF_STOCK
+  GOOD
+  NEEDS_REPAIR
+  OUT_OF_SERVICE
+
+  @@map("inventory_status")
+}
+
+enum InventoryCategory {
+  CHEMICAL
+  PPE
+  CONSUMABLES
+  CLEANING_TOOLS_MANUAL
+  POWERED_EQUIPMENT_MACHINERY
+  SPARE_PARTS
+  OTHER
+
+  @@map("inventory_category")
+}
+
+enum InspectionSessionStatus {
+  OPEN
+  COMPLETED
+
+  @@map("inspection_session_status")
+}
+
+enum InspectionRating {
+  EXCELLENT
+  ABOVE_AVERAGE
+  AVERAGE
+  BELOW_AVERAGE
+  VERY_POOR
+
+  @@map("inspection_rating")
+}
+
 enum ClickupConnectionStatus {
   CONNECTED
   DISCONNECTED
@@ -127,11 +168,135 @@ model AdminUser {
   createdAt DateTime    @default(now()) @map("created_at")
   lastLoginAt DateTime? @map("last_login_at")
 
-  clientsCreated     Client[]            @relation("ClientCreatedBy")
-  clickupConnections ClickupConnection[]
-  csvImportBatches   CsvImportBatch[]
+  clientsCreated          Client[]            @relation("ClientCreatedBy")
+  clickupConnections      ClickupConnection[]
+  csvImportBatches        CsvImportBatch[]
+  inventoryItemsCreated   InventoryItem[]     @relation("InventoryCreatedBy")
+  inventoryItemsUpdated   InventoryItem[]     @relation("InventoryUpdatedBy")
+  inventoryHistoryChanges InventoryHistory[]
+  inspectionsCreated      SiteInspection[]    @relation("InspectionCreatedBy")
+  inspectionsCompleted    SiteInspection[]    @relation("InspectionCompletedBy")
+  inspectionItemsCreated  InspectionItem[]
 
   @@map("admin_users")
+}
+
+/// Site-level supply/asset record (discovery doc §1.3). `item` is plain
+/// text (e.g. "Toilet Paper"), not an enum — the specific item's name,
+/// not its category. `category` is the actual classification dropdown
+/// ("Types" in the UI, confirmed with the user 2026-09-02).
+model InventoryItem {
+  id             String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  siteId         String            @map("site_id") @db.Uuid
+  site           Site              @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  item           String
+  category       InventoryCategory
+  status         InventoryStatus
+  quantity       Int
+  lastSupplyDate DateTime?         @map("last_supply_date")
+  notes          String?
+  createdBy      String?           @map("created_by") @db.Uuid
+  createdByUser  AdminUser?        @relation("InventoryCreatedBy", fields: [createdBy], references: [id])
+  updatedBy      String?           @map("updated_by") @db.Uuid
+  updatedByUser  AdminUser?        @relation("InventoryUpdatedBy", fields: [updatedBy], references: [id])
+  createdAt      DateTime          @default(now()) @map("created_at")
+  updatedAt      DateTime          @updatedAt @map("updated_at")
+
+  history InventoryHistory[]
+
+  @@index([siteId])
+  @@map("inventory_items")
+}
+
+/// Snapshot of an InventoryItem's PRE-update values. Capped at the
+/// 10 most recent rows per item — pruned in application code
+/// (InventoryService), not a DB constraint. Confirmed with the user
+/// 2026-08-29 ("Q3").
+model InventoryHistory {
+  id               String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  inventoryItemId  String          @map("inventory_item_id") @db.Uuid
+  inventoryItem    InventoryItem   @relation(fields: [inventoryItemId], references: [id], onDelete: Cascade)
+  previousQuantity Int             @map("previous_quantity")
+  previousStatus   InventoryStatus @map("previous_status")
+  previousNotes    String?         @map("previous_notes")
+  changedBy        String?         @map("changed_by") @db.Uuid
+  changedByUser    AdminUser?      @relation(fields: [changedBy], references: [id])
+  changedAt        DateTime        @default(now()) @map("changed_at")
+
+  @@index([inventoryItemId])
+  @@map("inventory_history")
+}
+
+/// One inspection session per site. A session can span multiple
+/// visits/days and stays OPEN until every space/item is covered
+/// (rated or marked Not Applicable) and explicitly finished —
+/// confirmed with the user 2026-08-29 ("Q1"/"Q2"). Only one OPEN
+/// session per site at a time — enforced via a hand-written partial
+/// unique index (uq_site_open_inspection), not expressible in
+/// schema.prisma directly.
+model SiteInspection {
+  id              String                  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  siteId          String                  @map("site_id") @db.Uuid
+  site            Site                    @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  status          InspectionSessionStatus @default(OPEN)
+  averageScore    Int?                    @map("average_score")
+  meetsStandard   Boolean?                @map("meets_standard")
+  createdBy       String?                 @map("created_by") @db.Uuid
+  createdByUser   AdminUser?              @relation("InspectionCreatedBy", fields: [createdBy], references: [id])
+  completedBy     String?                 @map("completed_by") @db.Uuid
+  completedByUser AdminUser?              @relation("InspectionCompletedBy", fields: [completedBy], references: [id])
+  startedAt       DateTime                @default(now()) @map("started_at")
+  completedAt     DateTime?               @map("completed_at")
+
+  items InspectionItem[]
+
+  @@index([siteId])
+  @@index([status])
+  @@map("site_inspections")
+}
+
+/// One row per space/area/item inspected within a session. rating
+/// and percentage are null when isNotApplicable is true — Not
+/// Applicable items are excluded from the average score entirely
+/// (confirmed with the user 2026-08-29, "Q1"/"Q2").
+model InspectionItem {
+  id              String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  inspectionId    String            @map("inspection_id") @db.Uuid
+  inspection      SiteInspection    @relation(fields: [inspectionId], references: [id], onDelete: Cascade)
+  spaceName       String            @map("space_name")
+  isNotApplicable Boolean           @default(false) @map("is_not_applicable")
+  rating          InspectionRating?
+  percentage      Int?
+  notes           String?
+  createdBy       String?           @map("created_by") @db.Uuid
+  createdByUser   AdminUser?        @relation(fields: [createdBy], references: [id])
+  createdAt       DateTime          @default(now()) @map("created_at")
+  updatedAt       DateTime          @updatedAt @map("updated_at")
+
+  media InspectionMedia[]
+
+  @@index([inspectionId])
+  @@map("inspection_items")
+}
+
+/// Attachments for an inspection item. No stored URL — derive it
+/// from cloudinaryPublicId + resourceType at read time, same
+/// pattern as FeedbackMedia. Reuses the existing MediaResourceType/
+/// MediaStatus enums.
+model InspectionMedia {
+  id                 String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  inspectionItemId   String            @map("inspection_item_id") @db.Uuid
+  inspectionItem     InspectionItem    @relation(fields: [inspectionItemId], references: [id], onDelete: Cascade)
+  cloudinaryPublicId String            @unique @map("cloudinary_public_id")
+  resourceType       MediaResourceType @map("resource_type")
+  originalFilename   String?           @map("original_filename")
+  mimeType           String            @map("mime_type")
+  sizeBytes          Int               @map("size_bytes")
+  status             MediaStatus       @default(PENDING)
+  uploadedAt         DateTime          @default(now()) @map("uploaded_at")
+
+  @@index([inspectionItemId])
+  @@map("inspection_media")
 }
 
 /// One row per authorised ClickUp Workspace connection (OAuth).
@@ -224,6 +389,8 @@ model Site {
 
   feedbackSubmissions FeedbackSubmission[]
   csvImportRows       CsvImportRow[]
+  inventoryItems      InventoryItem[]
+  inspections         SiteInspection[]
 
   @@unique([clientCode, siteCode], map: "uq_client_site_code")
   @@index([status])
