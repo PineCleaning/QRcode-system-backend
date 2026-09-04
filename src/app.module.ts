@@ -15,6 +15,7 @@ import { CsvImportModule } from './csv-import/csv-import.module';
 import { FeedbackModule } from './feedback/feedback.module';
 import { HealthController } from './health/health.controller';
 import { IntegrationJobsModule } from './integration-jobs/integration-jobs.module';
+import { InventoryModule } from './inventory/inventory.module';
 import { PrismaModule } from './prisma/prisma.module';
 import { PublicModule } from './public/public.module';
 import { SitesModule } from './sites/sites.module';
@@ -50,6 +51,7 @@ import { SupabaseModule } from './supabase/supabase.module';
     AdminMediaModule,
     AdminUsersModule,
     CsvImportModule,
+    InventoryModule,
   ],
   controllers: [AppController, HealthController],
   providers: [AppService],
