@@ -14,6 +14,7 @@ import { CloudinaryModule } from './cloudinary/cloudinary.module';
 import { CsvImportModule } from './csv-import/csv-import.module';
 import { FeedbackModule } from './feedback/feedback.module';
 import { HealthController } from './health/health.controller';
+import { InspectionsModule } from './inspections/inspections.module';
 import { IntegrationJobsModule } from './integration-jobs/integration-jobs.module';
 import { InventoryModule } from './inventory/inventory.module';
 import { PrismaModule } from './prisma/prisma.module';
@@ -52,6 +53,7 @@ import { SupabaseModule } from './supabase/supabase.module';
     AdminUsersModule,
     CsvImportModule,
     InventoryModule,
+    InspectionsModule,
   ],
   controllers: [AppController, HealthController],
   providers: [AppService],
