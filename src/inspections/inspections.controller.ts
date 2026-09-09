@@ -36,9 +36,21 @@ export class InspectionsController {
     return this.inspections.findAllForSite(siteId);
   }
 
+  /** Week 3 Wed - the last 10 completed sessions for a site, for the "Past Inspections" list. */
+  @Get('sites/:siteId/inspections/completed')
+  findCompletedForSite(@Param('siteId') siteId: string) {
+    return this.inspections.findCompletedForSite(siteId);
+  }
+
   @Get('inspections/:id')
   findOne(@Param('id') id: string) {
     return this.inspections.findOne(id);
+  }
+
+  /** Open to both roles, same as add/edit item - only delete is Admin-only in this module. */
+  @Post('inspections/:id/finish')
+  finishInspection(@Param('id') id: string, @CurrentAdmin() admin: AdminUser) {
+    return this.inspections.finishInspection(id, admin.id);
   }
 
   @Post('inspections/:id/items')

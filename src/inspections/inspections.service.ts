@@ -45,6 +45,9 @@ const RATING_RANGES: Record<string, [number, number]> = {
   VERY_POOR: [0, 39],
 };
 
+/** Minimum average score (%) to pass an inspection - updated from the original 85% (Discovery doc, Week 3 Tue). */
+const MEETS_STANDARD_THRESHOLD = 80;
+
 @Injectable()
 export class InspectionsService {
   private readonly logger = new Logger(InspectionsService.name);
@@ -96,6 +99,30 @@ export class InspectionsService {
     });
   }
 
+  /**
+   * The last 10 COMPLETED sessions for a site (Week 3 Wed) - older ones
+   * stay fully in the database, simply not returned here. Deliberately
+   * lightweight (summary fields + item count, no items/media) since this
+   * backs a list view; GET /inspections/:id already returns full detail
+   * for whichever one gets clicked into.
+   */
+  async findCompletedForSite(siteId: string) {
+    const site = await this.prisma.site.findUnique({ where: { id: siteId } });
+    if (!site) {
+      throw new NotFoundException(`Site ${siteId} not found`);
+    }
+    const inspections = await this.prisma.siteInspection.findMany({
+      where: { siteId, status: 'COMPLETED' },
+      orderBy: { completedAt: 'desc' },
+      take: 10,
+      include: { _count: { select: { items: true } } },
+    });
+    return inspections.map(({ _count, ...inspection }) => ({
+      ...inspection,
+      itemCount: _count.items,
+    }));
+  }
+
   async findOne(id: string) {
     const inspection = await this.prisma.siteInspection.findUnique({
       where: { id },
@@ -107,6 +134,60 @@ export class InspectionsService {
       throw new NotFoundException(`Inspection ${id} not found`);
     }
     return this.mapInspectionMedia(inspection);
+  }
+
+  /**
+   * Locks the session (OPEN -> COMPLETED) and computes its final score:
+   * the average percentage across every rated item, excluding "Not
+   * Applicable" ones entirely (they were never scored in the first
+   * place). Requires at least one rated item - finishing an empty or
+   * all-N/A session would produce a meaningless score, not a real
+   * result.
+   */
+  async finishInspection(inspectionId: string, adminId: string) {
+    const inspection = await this.prisma.siteInspection.findUnique({
+      where: { id: inspectionId },
+      include: { items: true },
+    });
+    if (!inspection) {
+      throw new NotFoundException(`Inspection ${inspectionId} not found`);
+    }
+    if (inspection.status !== 'OPEN') {
+      throw new ConflictException(
+        'This inspection session is already finished.',
+      );
+    }
+
+    const ratedItems = inspection.items.filter(
+      (item) => !item.isNotApplicable && item.percentage !== null,
+    );
+    if (ratedItems.length === 0) {
+      throw new BadRequestException(
+        'Add at least one rated space before finishing this inspection.',
+      );
+    }
+
+    const averageScore = Math.round(
+      ratedItems.reduce((sum, item) => sum + item.percentage!, 0) /
+        ratedItems.length,
+    );
+    const meetsStandard = averageScore >= MEETS_STANDARD_THRESHOLD;
+
+    const completed = await this.prisma.siteInspection.update({
+      where: { id: inspectionId },
+      data: {
+        status: 'COMPLETED',
+        completedAt: new Date(),
+        completedBy: adminId,
+        averageScore,
+        meetsStandard,
+      },
+      include: {
+        items: { include: { media: true }, orderBy: { createdAt: 'asc' } },
+      },
+    });
+
+    return this.mapInspectionMedia(completed);
   }
 
   async addItem(
@@ -364,9 +445,8 @@ export class InspectionsService {
     if (!inspection) {
       throw new NotFoundException(`Inspection ${inspectionId} not found`);
     }
-    // Nothing can mark a session COMPLETED yet (Week 3's "Finish Inspection"
-    // action) - this guard is here defensively so it's already correct once
-    // that exists, not because it can actually trigger today.
+    // A session moves to COMPLETED via finishInspection() - once it does,
+    // its items become read-only.
     if (inspection.status !== 'OPEN') {
       throw new ConflictException(
         'This inspection session is already finished - items cannot be added or edited',
