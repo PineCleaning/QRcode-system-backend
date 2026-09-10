@@ -36,6 +36,8 @@ enum AdminStatus {
 enum AdminRole {
   ADMIN
   SUPERVISOR
+  MANAGER
+  ADMIN_SUPPORT
 
   @@map("admin_role")
 }
@@ -108,6 +110,14 @@ enum IntegrationJobStatus {
 /// Profile table only — NOT auth. id references Supabase Auth's own
 /// auth.users table; sign-in/passwords are fully owned by Supabase
 /// Auth and never stored here.
+///
+/// Exactly one ADMIN row, ever, permanently - enforced via a
+/// hand-written partial unique index (uq_admin_users_single_admin on
+/// role where role = 'ADMIN'), not expressible in schema.prisma
+/// directly, same reasoning as SiteInspection's uq_site_open_inspection.
+/// The app layer also never allows creating or promoting a second
+/// ADMIN (CreateAdminUserDto/UpdateAdminUserDto's role field excludes
+/// 'ADMIN' entirely) - the DB constraint is the hard backstop.
 model AdminUser {
   id        String      @id @db.Uuid
   email     String      @unique
@@ -169,7 +179,7 @@ model ClickupConnection {
   /// to null on a successful reconnect.
   disconnectedAt           DateTime?               @map("disconnected_at")
   connectedBy              String?                 @map("connected_by") @db.Uuid
-  connectedByUser          AdminUser?              @relation(fields: [connectedBy], references: [id])
+  connectedByUser          AdminUser?              @relation(fields: [connectedBy], references: [id], onDelete: SetNull)
   connectedAt              DateTime                @default(now()) @map("connected_at")
 
   @@index([status])
@@ -184,7 +194,7 @@ model Client {
   status          ClientSiteStatus @default(ACTIVE)
   clickupEntityId String?          @map("clickup_entity_id")
   createdBy       String?          @map("created_by") @db.Uuid
-  createdByUser   AdminUser?       @relation("ClientCreatedBy", fields: [createdBy], references: [id])
+  createdByUser   AdminUser?       @relation("ClientCreatedBy", fields: [createdBy], references: [id], onDelete: SetNull)
   createdAt       DateTime         @default(now()) @map("created_at")
   updatedAt       DateTime         @updatedAt @map("updated_at")
 
@@ -268,7 +278,7 @@ model FeedbackMedia {
 model CsvImportBatch {
   id             String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   uploadedBy     String?        @map("uploaded_by") @db.Uuid
-  uploadedByUser AdminUser?     @relation(fields: [uploadedBy], references: [id])
+  uploadedByUser AdminUser?     @relation(fields: [uploadedBy], references: [id], onDelete: SetNull)
   filename       String
   status         CsvBatchStatus @default(PROCESSING)
   totalRows      Int            @default(0) @map("total_rows")
