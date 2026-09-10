@@ -1,4 +1,4 @@
-import { Body, Controller, Get, HttpCode, Param, Patch, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, HttpCode, Param, Patch, Post, UseGuards } from '@nestjs/common';
 import { Roles } from '../auth/roles.decorator';
 import { RolesGuard } from '../auth/roles.guard';
 import { SupabaseAuthGuard } from '../auth/supabase-auth.guard';
@@ -32,5 +32,12 @@ export class AdminUsersController {
   @HttpCode(200)
   resetPassword(@Param('id') id: string) {
     return this.service.resetPassword(id);
+  }
+
+  /** Admin-only (already true for the whole controller). Blocks deleting the Admin account itself - see AdminUsersService.remove(). */
+  @Delete(':id')
+  @HttpCode(204)
+  remove(@Param('id') id: string) {
+    return this.service.remove(id);
   }
 }

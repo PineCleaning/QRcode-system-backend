@@ -1,5 +1,6 @@
 import { ConflictException, ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { randomBytes } from 'node:crypto';
+import { Prisma } from '../../generated/prisma/client';
 import { AuthCacheService } from '../auth/auth-cache.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { SupabaseService } from '../supabase/supabase.service';
@@ -77,7 +78,11 @@ export class AdminUsersService {
   async update(id: string, dto: UpdateAdminUserDto) {
     const admin = await this.findOne(id);
 
-    if ((dto.role === 'SUPERVISOR' || dto.status === 'INACTIVE') && admin.role === 'ADMIN' && admin.status === 'ACTIVE') {
+    // dto.role can never literally be 'ADMIN' (see UpdateAdminUserDto),
+    // so any role value here is an attempted demotion - checked against
+    // any of the three non-Admin roles, not just SUPERVISOR, now that
+    // there are more than one.
+    if ((dto.role !== undefined || dto.status === 'INACTIVE') && admin.role === 'ADMIN' && admin.status === 'ACTIVE') {
       await this.assertNotLastActiveAdmin(id);
     }
 
@@ -111,6 +116,77 @@ export class AdminUsersService {
     const password = generatePassword();
     await this.supabase.updateUserPassword(id, password);
     return { temporaryPassword: password };
+  }
+
+  /**
+   * Hard-deletes a user's admin_users row and their real Supabase Auth
+   * login credential - used both by the manual Delete button and the
+   * 21-days-inactive auto-delete cron (AdminUsersCleanupService), so
+   * both directions can never drift apart on what "delete" actually
+   * does, same philosophy as AdminFeedbackService.remove() being
+   * shared between the dashboard delete button and the ClickUp
+   * reconciliation cron.
+   *
+   * The Admin account can never be deleted this way, manually or
+   * automatically - there is exactly one, permanently (also enforced
+   * at the DB level by uq_admin_users_single_admin, but checked here
+   * too so the error is a clear 403 rather than a generic failure).
+   *
+   * Auth-account deletion happens first, best-effort (logged, never
+   * blocks) - same "best-effort external cleanup first, guaranteed DB
+   * delete last" order AdminFeedbackService.remove() already uses for
+   * ClickUp/Cloudinary. If the Auth deletion fails, the leftover
+   * credential can never grant real access anyway once the admin_users
+   * row is gone (SupabaseAuthGuard requires a matching row) - the only
+   * downside is it needs manual cleanup in the Supabase dashboard.
+   *
+   * Idempotent by design (P2025 "record not found" is swallowed, not
+   * thrown) - same "deleting something already gone is success, not an
+   * error" philosophy as ClickupApiClient.deleteTicket. This matters
+   * because remove() is reachable from two independent triggers (the
+   * manual Delete button and the nightly auto-delete cron) that could
+   * race on the same id, and a caller here only ever wants "this user
+   * is gone" to be true, not "I personally performed the delete."
+   */
+  async remove(id: string): Promise<void> {
+    const admin = await this.findOne(id);
+    if (admin.role === 'ADMIN') {
+      throw new ForbiddenException('The Admin account cannot be deleted.');
+    }
+
+    await this.supabase.deleteAuthUser(id).catch((err) => {
+      this.logger.warn(`Failed to delete Supabase Auth account for ${id} - admin_users row will still be removed: ${err instanceof Error ? err.message : err}`);
+    });
+
+    try {
+      await this.prisma.adminUser.delete({ where: { id } });
+    } catch (err) {
+      if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2025') {
+        this.authCache.invalidateUser(id);
+        return;
+      }
+      throw err;
+    }
+
+    this.authCache.invalidateUser(id);
+  }
+
+  /**
+   * Non-Admin users who haven't logged in since `cutoff` - or who
+   * never logged in at all and were created before `cutoff` - for the
+   * 21-days-inactive auto-delete cron. 'role: not ADMIN' is the same
+   * protection remove() itself already enforces, checked again here so
+   * the Admin account is never even considered a candidate in the
+   * first place.
+   */
+  findInactiveNonAdmin(cutoff: Date) {
+    return this.prisma.adminUser.findMany({
+      where: {
+        role: { not: 'ADMIN' },
+        OR: [{ lastLoginAt: { lt: cutoff } }, { lastLoginAt: null, createdAt: { lt: cutoff } }],
+      },
+      select: { id: true, email: true },
+    });
   }
 
   /** Prevents demoting/deactivating the last active ADMIN, which would leave nobody able to manage users, clients, or deletions at all. */
