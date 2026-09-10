@@ -268,6 +268,58 @@ export class InspectionsService {
   }
 
   /**
+   * Toggles the flagged marker - deliberately does NOT go through
+   * assertOpenInspection. Unlike rating/notes/photos, a flag is a
+   * follow-up marker, not inspection data, so it stays toggleable even
+   * after the session is COMPLETED and the rest of the item is
+   * read-only (e.g. flagging something noticed while reviewing a
+   * finished report, or un-flagging once it's been resolved).
+   */
+  async setItemFlagged(itemId: string, flagged: boolean) {
+    const item = await this.prisma.inspectionItem.findUnique({ where: { id: itemId } });
+    if (!item) {
+      throw new NotFoundException(`Inspection item ${itemId} not found`);
+    }
+    const updated = await this.prisma.inspectionItem.update({
+      where: { id: itemId },
+      data: { flagged },
+      include: { media: true },
+    });
+    return this.mapItemMedia(updated);
+  }
+
+  /**
+   * Every flagged item across every site/client, for the Flagged tab -
+   * joins in just enough site/client context to link back, same shape
+   * convention as AdminFeedbackService.findAll's site/client include.
+   */
+  async findFlaggedItems() {
+    const items = await this.prisma.inspectionItem.findMany({
+      where: { flagged: true },
+      orderBy: { createdAt: 'desc' },
+      include: {
+        media: true,
+        inspection: {
+          select: {
+            id: true,
+            status: true,
+            site: {
+              select: {
+                id: true,
+                businessName: true,
+                address: true,
+                slug: true,
+                client: { select: { id: true, clientName: true, clientId: true } },
+              },
+            },
+          },
+        },
+      },
+    });
+    return items.map((item) => this.mapItemMedia(item));
+  }
+
+  /**
    * Permanently deletes one attachment - from Cloudinary storage and
    * the DB row - same pattern as AdminMediaService.remove() for
    * feedback attachments. A Cloudinary-side failure (already-gone

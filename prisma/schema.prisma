@@ -258,6 +258,14 @@ model InspectionItem {
   rating          InspectionRating?
   percentage      Int?
   notes           String?
+  /// Manually toggled by an admin/supervisor to mark this item as needing
+  /// follow-up - independent of its rating (confirmed with the user
+  /// 2026-09-09: a supervisor flags something because it's urgent, not
+  /// because the system inferred it from a low score). Surfaced on the
+  /// Flagged tab. Can be toggled regardless of the parent session's
+  /// OPEN/COMPLETED status - unlike rating/notes/photos, it's not locked
+  /// on finish, since a flag is a follow-up marker, not inspection data.
+  flagged         Boolean           @default(false)
   createdBy       String?           @map("created_by") @db.Uuid
   createdByUser   AdminUser?        @relation(fields: [createdBy], references: [id])
   createdAt       DateTime          @default(now()) @map("created_at")
@@ -266,6 +274,7 @@ model InspectionItem {
   media InspectionMedia[]
 
   @@index([inspectionId])
+  @@index([flagged])
   @@map("inspection_items")
 }
 
@@ -401,6 +410,10 @@ model FeedbackSubmission {
   mobileNumber   String?        @map("mobile_number")
   status         FeedbackStatus @default(SUBMITTED)
   clickupTaskId  String?        @map("clickup_task_id")
+  /// Manually toggled by an admin/supervisor to mark this feedback as
+  /// needing urgent follow-up. Surfaced on the Flagged tab alongside
+  /// flagged inspection items.
+  flagged        Boolean        @default(false)
   submittedAt    DateTime       @default(now()) @map("submitted_at")
   deliveredAt    DateTime?      @map("delivered_at")
 
@@ -410,6 +423,7 @@ model FeedbackSubmission {
   @@index([siteId])
   @@index([submittedAt])
   @@index([status])
+  @@index([flagged])
   @@map("feedback_submissions")
 }
 
