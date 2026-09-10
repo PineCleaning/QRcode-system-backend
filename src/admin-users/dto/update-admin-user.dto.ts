@@ -1,6 +1,15 @@
 import { IsIn, IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
 
-/** No email here - immutable after creation, matches the pattern already used by clientId/siteCode elsewhere in this app. */
+/**
+ * No email here - immutable after creation, matches the pattern
+ * already used by clientId/siteCode elsewhere in this app.
+ *
+ * 'ADMIN' is deliberately never a settable value here either - no one
+ * can be promoted to Admin, matching CreateAdminUserDto (see its
+ * comment). The sole existing Admin's own role is therefore never
+ * sent by the Edit form at all (see EditAdminUserModal.tsx) - not
+ * "kept as ADMIN via this field," just never included in the request.
+ */
 export class UpdateAdminUserDto {
   @IsString()
   @MinLength(1)
@@ -8,9 +17,9 @@ export class UpdateAdminUserDto {
   @IsOptional()
   fullName?: string;
 
-  @IsIn(['ADMIN', 'SUPERVISOR'])
+  @IsIn(['SUPERVISOR', 'MANAGER', 'ADMIN_SUPPORT'])
   @IsOptional()
-  role?: 'ADMIN' | 'SUPERVISOR';
+  role?: 'SUPERVISOR' | 'MANAGER' | 'ADMIN_SUPPORT';
 
   @IsIn(['ACTIVE', 'INACTIVE'])
   @IsOptional()
