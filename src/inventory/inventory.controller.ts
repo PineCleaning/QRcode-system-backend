@@ -1,10 +1,11 @@
-import { Body, Controller, Delete, Get, HttpCode, Param, Post, Put, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, HttpCode, Param, Post, Put, Query, UseGuards } from '@nestjs/common';
 import type { AdminUser } from '../../generated/prisma/client';
 import { CurrentAdmin } from '../auth/current-admin.decorator';
 import { Roles } from '../auth/roles.decorator';
 import { RolesGuard } from '../auth/roles.guard';
 import { SupabaseAuthGuard } from '../auth/supabase-auth.guard';
 import { CreateInventoryItemDto } from './dto/create-inventory-item.dto';
+import { FindAllInventoryQueryDto } from './dto/find-all-inventory-query.dto';
 import { UpdateInventoryItemDto } from './dto/update-inventory-item.dto';
 import { InventoryService } from './inventory.service';
 
@@ -19,8 +20,8 @@ export class InventoryController {
   }
 
   @Get('sites/:siteId/inventory')
-  findAllForSite(@Param('siteId') siteId: string) {
-    return this.inventory.findAllForSite(siteId);
+  findAllForSite(@Param('siteId') siteId: string, @Query() query: FindAllInventoryQueryDto) {
+    return this.inventory.findAllForSite(siteId, query.page, query.pageSize);
   }
 
   @Get('inventory/:id')
