@@ -10,15 +10,39 @@ const MAX_HISTORY_ROWS = 10;
 export class InventoryService {
   constructor(private readonly prisma: PrismaService) {}
 
-  async findAllForSite(siteId: string) {
+  /**
+   * With neither page nor pageSize, returns the full unpaginated array -
+   * same backward-compatible convention as ClientsService.findAll, kept
+   * here defensively even though this endpoint currently has only one
+   * caller (the Inventory page itself).
+   */
+  async findAllForSite(siteId: string, page?: number, pageSize?: number) {
     const site = await this.prisma.site.findUnique({ where: { id: siteId } });
     if (!site) {
       throw new NotFoundException(`Site ${siteId} not found`);
     }
-    return this.prisma.inventoryItem.findMany({
-      where: { siteId },
-      orderBy: { createdAt: 'desc' },
-    });
+
+    if (!page && !pageSize) {
+      return this.prisma.inventoryItem.findMany({
+        where: { siteId },
+        orderBy: { createdAt: 'desc' },
+      });
+    }
+
+    const currentPage = page ?? 1;
+    const size = pageSize ?? 50;
+
+    const [data, total] = await Promise.all([
+      this.prisma.inventoryItem.findMany({
+        where: { siteId },
+        orderBy: { createdAt: 'desc' },
+        skip: (currentPage - 1) * size,
+        take: size,
+      }),
+      this.prisma.inventoryItem.count({ where: { siteId } }),
+    ]);
+
+    return { data, total, page: currentPage, pageSize: size };
   }
 
   async findOne(id: string) {
