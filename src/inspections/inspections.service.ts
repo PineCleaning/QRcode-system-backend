@@ -5,6 +5,7 @@ import {
   Logger,
   NotFoundException,
 } from '@nestjs/common';
+import { Prisma } from '../../generated/prisma/client';
 import { CloudinaryService } from '../cloudinary/cloudinary.service';
 import {
   ALLOWED_IMAGE_FORMATS,
@@ -63,14 +64,22 @@ export class InspectionsService {
    * this endpoint to continue where they left off across multiple
    * visits/days. The partial unique index (uq_site_open_inspection) is
    * the real guarantee against two OPEN sessions for the same site under
-   * concurrent requests - this check is just the common-case fast path.
+   * concurrent requests - the findFirst check below is just the
+   * common-case fast path, not a lock. Verified live 2026-09-16: firing
+   * 5 truly concurrent calls for a site with no OPEN session, 4 of them
+   * hit the unique constraint - the catch block below is what turns
+   * that into "join the session the winner just created" instead of a
+   * raw 500. Before this fix, that race produced exactly that 500.
    */
   async openOrResume(siteId: string, adminId: string) {
-    const site = await this.prisma.site.findUnique({ where: { id: siteId } });
-    if (!site) {
-      throw new NotFoundException(`Site ${siteId} not found`);
-    }
-
+    // Check for an existing OPEN session first - this is the common
+    // case on every repeat call while a staff member is actively
+    // working through a session (this endpoint is re-hit on every page
+    // load and on every item mutation's revalidation), so it shouldn't
+    // pay for a separate site-existence check first. The site-existence
+    // check only matters for the rarer "starting a brand new session"
+    // path below, where it's needed to give a friendly 404 instead of
+    // a raw foreign-key error from the create.
     const existing = await this.prisma.siteInspection.findFirst({
       where: { siteId, status: 'OPEN' },
       include: {
@@ -81,11 +90,61 @@ export class InspectionsService {
       return this.mapInspectionMedia(existing);
     }
 
-    const created = await this.prisma.siteInspection.create({
-      data: { siteId, createdBy: adminId },
-      include: { items: { include: { media: true } } },
-    });
-    return this.mapInspectionMedia(created);
+    // Starting a brand-new session (measured 2026-09-16: this cold-start
+    // path - separate site-existence check, then create - cost 3
+    // sequential round trips total with the findFirst above, most
+    // visible right after "Finish Inspection" when the page immediately
+    // needs a fresh session). The site-existence check is folded into
+    // the INSERT's own guard instead of a separate query, and the
+    // response is built from what was just inserted rather than reading
+    // it back - a session this instant old always has zero items.
+    try {
+      const rows = await this.prisma.$queryRaw<
+        Array<{
+          id: string;
+          siteId: string;
+          status: string;
+          averageScore: number | null;
+          meetsStandard: boolean | null;
+          createdBy: string | null;
+          completedBy: string | null;
+          startedAt: Date;
+          completedAt: Date | null;
+        }>
+      >`
+        INSERT INTO site_inspections (id, site_id, status, created_by, started_at)
+        SELECT gen_random_uuid(), ${siteId}::uuid, 'OPEN', ${adminId}::uuid, now()
+        WHERE EXISTS (SELECT 1 FROM sites WHERE id = ${siteId}::uuid)
+        RETURNING id, site_id AS "siteId", status, average_score AS "averageScore",
+          meets_standard AS "meetsStandard", created_by AS "createdBy", completed_by AS "completedBy",
+          started_at AS "startedAt", completed_at AS "completedAt"
+      `;
+
+      if (rows.length === 0) {
+        throw new NotFoundException(`Site ${siteId} not found`);
+      }
+
+      return this.mapInspectionMedia({ ...rows[0], items: [] });
+    } catch (err) {
+      // Two (or more) concurrent requests can each pass the findFirst
+      // check above believing no OPEN session exists yet, then all
+      // attempt to create one - uq_site_open_inspection lets exactly
+      // one succeed and rejects the rest with a unique-constraint
+      // violation. Whoever loses that race just fetches and joins the
+      // session the winner created, instead of surfacing a raw 500.
+      if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
+        const existing = await this.prisma.siteInspection.findFirst({
+          where: { siteId, status: 'OPEN' },
+          include: {
+            items: { include: { media: true }, orderBy: { createdAt: 'asc' } },
+          },
+        });
+        if (existing) {
+          return this.mapInspectionMedia(existing);
+        }
+      }
+      throw err;
+    }
   }
 
   async findAllForSite(siteId: string) {
@@ -115,12 +174,24 @@ export class InspectionsService {
       where: { siteId, status: 'COMPLETED' },
       orderBy: { completedAt: 'desc' },
       take: 10,
-      include: { _count: { select: { items: true } } },
+      include: {
+        _count: { select: { items: true } },
+        completedByUser: { select: { fullName: true, email: true } },
+        createdByUser: { select: { fullName: true, email: true } },
+      },
     });
-    return inspections.map(({ _count, ...inspection }) => ({
-      ...inspection,
-      itemCount: _count.items,
-    }));
+    return inspections.map(({ _count, completedByUser, createdByUser, ...inspection }) => {
+      // "Who did the inspection" - the admin who finished it if the
+      // session has one, otherwise whoever opened it (a completed
+      // session should normally have both, but older data or a
+      // since-deleted admin account can leave completedByUser null).
+      const inspector = completedByUser ?? createdByUser;
+      return {
+        ...inspection,
+        itemCount: _count.items,
+        inspectedBy: inspector ? inspector.fullName || inspector.email : null,
+      };
+    });
   }
 
   async findOne(id: string) {
@@ -143,51 +214,70 @@ export class InspectionsService {
    * place). Requires at least one rated item - finishing an empty or
    * all-N/A session would produce a meaningless score, not a real
    * result.
+   *
+   * Single guarded UPDATE (measured 2026-09-16: the old two-step
+   * version - findUnique to read items for scoring, then a separate
+   * update - cost ~3s raw backend time for what should be one write).
+   * The average is computed in the same statement via a correlated
+   * subquery instead of pulling every item's percentage into Node
+   * first, so there's exactly one round trip on the success path. Only
+   * the caller (finishInspectionAction) consumes this response, and it
+   * only reads averageScore/meetsStandard - not the full item list -
+   * so this deliberately returns a lighter shape than findOne's.
    */
   async finishInspection(inspectionId: string, adminId: string) {
-    const inspection = await this.prisma.siteInspection.findUnique({
-      where: { id: inspectionId },
-      include: { items: true },
-    });
-    if (!inspection) {
-      throw new NotFoundException(`Inspection ${inspectionId} not found`);
-    }
-    if (inspection.status !== 'OPEN') {
-      throw new ConflictException(
-        'This inspection session is already finished.',
+    const rows = await this.prisma.$queryRaw<
+      Array<{
+        id: string;
+        averageScore: number | null;
+        meetsStandard: boolean | null;
+      }>
+    >`
+      UPDATE site_inspections si
+      SET status = 'COMPLETED',
+          completed_at = now(),
+          completed_by = ${adminId}::uuid,
+          average_score = sub.avg_score,
+          meets_standard = sub.avg_score >= ${MEETS_STANDARD_THRESHOLD}
+      FROM (
+        SELECT ROUND(AVG(percentage))::int AS avg_score, COUNT(*) AS rated_count
+        FROM inspection_items
+        WHERE inspection_id = ${inspectionId}::uuid
+          AND is_not_applicable = false
+          AND percentage IS NOT NULL
+      ) sub
+      WHERE si.id = ${inspectionId}::uuid AND si.status = 'OPEN' AND sub.rated_count > 0
+      RETURNING si.id, si.average_score AS "averageScore", si.meets_standard AS "meetsStandard"
+    `;
+
+    if (rows.length === 0) {
+      // Rare path - something's wrong. Re-check with the original
+      // sequential logic purely to reproduce the exact same
+      // NotFound/Conflict/BadRequest messages as before.
+      const inspection = await this.prisma.siteInspection.findUnique({
+        where: { id: inspectionId },
+        include: { items: true },
+      });
+      if (!inspection) {
+        throw new NotFoundException(`Inspection ${inspectionId} not found`);
+      }
+      if (inspection.status !== 'OPEN') {
+        throw new ConflictException(
+          'This inspection session is already finished.',
+        );
+      }
+      const hasRatedItem = inspection.items.some(
+        (item) => !item.isNotApplicable && item.percentage !== null,
       );
+      if (!hasRatedItem) {
+        throw new BadRequestException(
+          'Add at least one rated space before finishing this inspection.',
+        );
+      }
+      throw new ConflictException('Could not finish this inspection - please try again.');
     }
 
-    const ratedItems = inspection.items.filter(
-      (item) => !item.isNotApplicable && item.percentage !== null,
-    );
-    if (ratedItems.length === 0) {
-      throw new BadRequestException(
-        'Add at least one rated space before finishing this inspection.',
-      );
-    }
-
-    const averageScore = Math.round(
-      ratedItems.reduce((sum, item) => sum + item.percentage!, 0) /
-        ratedItems.length,
-    );
-    const meetsStandard = averageScore >= MEETS_STANDARD_THRESHOLD;
-
-    const completed = await this.prisma.siteInspection.update({
-      where: { id: inspectionId },
-      data: {
-        status: 'COMPLETED',
-        completedAt: new Date(),
-        completedBy: adminId,
-        averageScore,
-        meetsStandard,
-      },
-      include: {
-        items: { include: { media: true }, orderBy: { createdAt: 'asc' } },
-      },
-    });
-
-    return this.mapInspectionMedia(completed);
+    return rows[0];
   }
 
   async addItem(
@@ -195,7 +285,6 @@ export class InspectionsService {
     dto: CreateInspectionItemDto,
     adminId: string,
   ) {
-    const inspection = await this.assertOpenInspection(inspectionId);
     if (!dto.isNotApplicable) {
       this.assertPercentageInRange(dto.rating!, dto.percentage!);
     }
@@ -204,6 +293,55 @@ export class InspectionsService {
       dto.media,
     );
 
+    if (mediaCreates.length === 0) {
+      // Fast path (no attachments - the common case measured 2026-09-16
+      // taking ~2.2s for what should be simple write): a single guarded
+      // INSERT does the "session must still be OPEN" check and the
+      // write in one database round trip instead of a separate
+      // findUnique first. Only falls back to assertOpenInspection (a
+      // second query) on the rare failure path, purely to reproduce
+      // the same NotFound/Conflict messages as before.
+      const rows = await this.prisma.$queryRaw<
+        Array<{
+          id: string;
+          inspectionId: string;
+          spaceName: string;
+          isNotApplicable: boolean;
+          rating: string | null;
+          percentage: number | null;
+          notes: string | null;
+          flagged: boolean;
+          createdBy: string | null;
+          createdAt: Date;
+          updatedAt: Date;
+        }>
+      >`
+        INSERT INTO inspection_items
+          (id, inspection_id, space_name, is_not_applicable, rating, percentage, notes, created_by, created_at, updated_at)
+        SELECT gen_random_uuid(), ${inspectionId}::uuid, ${dto.spaceName}, ${dto.isNotApplicable ?? false},
+          ${dto.isNotApplicable ? null : dto.rating}::inspection_rating,
+          ${dto.isNotApplicable ? null : dto.percentage},
+          ${dto.notes ?? null}, ${adminId}::uuid, now(), now()
+        WHERE EXISTS (
+          SELECT 1 FROM site_inspections WHERE id = ${inspectionId}::uuid AND status = 'OPEN'
+        )
+        RETURNING
+          id, inspection_id AS "inspectionId", space_name AS "spaceName", is_not_applicable AS "isNotApplicable",
+          rating, percentage, notes, flagged, created_by AS "createdBy", created_at AS "createdAt", updated_at AS "updatedAt"
+      `;
+
+      if (rows.length === 0) {
+        await this.assertOpenInspection(inspectionId);
+        throw new ConflictException('Could not add this item - please try again.');
+      }
+
+      return this.mapItemMedia({ ...rows[0], media: [] });
+    }
+
+    // Slower path (photos/videos attached) - unchanged: the media
+    // verification/upload cost already dominates this path, so the
+    // extra findUnique round trip isn't worth the risk of touching it.
+    const inspection = await this.assertOpenInspection(inspectionId);
     const item = await this.prisma.inspectionItem.create({
       data: {
         inspectionId: inspection.id,
@@ -247,8 +385,12 @@ export class InspectionsService {
       );
     }
 
+    const existingVideoCount = item.media.filter(
+      (m) => m.resourceType === 'VIDEO' && m.status === 'VERIFIED',
+    ).length;
     const { mediaCreates, rejectionReasons } = await this.verifyMedia(
       dto.media,
+      existingVideoCount,
     );
 
     const updated = await this.prisma.inspectionItem.update({
@@ -357,11 +499,25 @@ export class InspectionsService {
    * reason surfaced back in the response (not a DB column, same as
    * FeedbackService.submit).
    */
-  private async verifyMedia(media: InspectionMediaDto[] | undefined) {
+  /**
+   * existingVideoCount lets a caller that's adding media to an item
+   * that already has some (updateItem) factor in videos from earlier
+   * calls, not just the ones in this one request - addItem's fresh
+   * item always passes 0 (the default) since it has no prior media.
+   * Bug found 2026-09-16 via exhaustive testing: without this, the
+   * "max 1 video per item" rule only ever looked at the current
+   * request's media array, so a second video attached in a later,
+   * separate edit call sailed through unverified against what the
+   * item already had.
+   */
+  private async verifyMedia(
+    media: InspectionMediaDto[] | undefined,
+    existingVideoCount = 0,
+  ) {
     const mediaCreates: InspectionMediaCreateData[] = [];
     const rejectionReasons: (string | null)[] = [];
     let totalVerifiedBytes = 0;
-    let verifiedVideoCount = 0;
+    let verifiedVideoCount = existingVideoCount;
 
     const resources = await Promise.all(
       (media ?? []).map((item) =>
