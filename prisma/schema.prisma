@@ -193,7 +193,7 @@ model InventoryItem {
   category       InventoryCategory
   status         InventoryStatus
   quantity       Int
-  lastSupplyDate DateTime?         @map("last_supply_date")
+  lastSupplied   DateTime?         @map("last_supplied")
   notes          String?
   createdBy      String?           @map("created_by") @db.Uuid
   createdByUser  AdminUser?        @relation("InventoryCreatedBy", fields: [createdBy], references: [id], onDelete: SetNull)
