@@ -5,6 +5,7 @@ import { Roles } from '../auth/roles.decorator';
 import { RolesGuard } from '../auth/roles.guard';
 import { SupabaseAuthGuard } from '../auth/supabase-auth.guard';
 import { CreateInventoryItemDto } from './dto/create-inventory-item.dto';
+import { FindAllAdminInventoryQueryDto } from './dto/find-all-admin-inventory-query.dto';
 import { FindAllInventoryQueryDto } from './dto/find-all-inventory-query.dto';
 import { UpdateInventoryItemDto } from './dto/update-inventory-item.dto';
 import { InventoryService } from './inventory.service';
@@ -13,6 +14,12 @@ import { InventoryService } from './inventory.service';
 @UseGuards(SupabaseAuthGuard, RolesGuard)
 export class InventoryController {
   constructor(private readonly inventory: InventoryService) {}
+
+  /** Global cross-site list for the admin portal's "Inventory / Assets" nav tab - same clientCode/siteId filter convention as AdminFeedbackController/AdminMediaController. */
+  @Get('admin/inventory')
+  findAllGlobal(@Query() query: FindAllAdminInventoryQueryDto) {
+    return this.inventory.findAllGlobal(query.clientCode, query.siteId, query.page, query.pageSize);
+  }
 
   @Post('sites/:siteId/inventory')
   create(@Param('siteId') siteId: string, @Body() dto: CreateInventoryItemDto, @CurrentAdmin() admin: AdminUser) {
