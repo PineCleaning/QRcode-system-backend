@@ -45,6 +45,50 @@ export class InventoryService {
     return { data, total, page: currentPage, pageSize: size };
   }
 
+  /**
+   * Cross-site inventory list for the admin portal's global "Inventory /
+   * Assets" tab (added under Feedbacks, per Antonio's request) - every
+   * item across every site, optionally narrowed by client/site, same
+   * clientCode/siteId filter + page/pageSize convention as
+   * AdminFeedbackService.findAll: no page/pageSize -> full unpaginated
+   * array, either param present -> { data, total, page, pageSize }.
+   */
+  async findAllGlobal(clientCode?: string, siteId?: string, page?: number, pageSize?: number) {
+    const where = {
+      ...(siteId && { siteId }),
+      ...(clientCode && { site: { clientCode } }),
+    };
+    const include = {
+      site: {
+        select: {
+          id: true,
+          businessName: true,
+          client: { select: { id: true, clientName: true, clientId: true } },
+        },
+      },
+    } as const;
+
+    if (!page && !pageSize) {
+      return this.prisma.inventoryItem.findMany({ where, orderBy: { createdAt: 'desc' }, include });
+    }
+
+    const currentPage = page ?? 1;
+    const size = pageSize ?? 50;
+
+    const [data, total] = await Promise.all([
+      this.prisma.inventoryItem.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+        include,
+        skip: (currentPage - 1) * size,
+        take: size,
+      }),
+      this.prisma.inventoryItem.count({ where }),
+    ]);
+
+    return { data, total, page: currentPage, pageSize: size };
+  }
+
   async findOne(id: string) {
     const item = await this.prisma.inventoryItem.findUnique({ where: { id } });
     if (!item) {
