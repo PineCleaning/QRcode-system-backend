@@ -41,7 +41,7 @@ export class UpdateInventoryItemDto {
 
   @IsDateString()
   @IsOptional()
-  lastSupplyDate?: string;
+  lastSupplied?: string;
 
   @IsString()
   @IsOptional()
