@@ -194,6 +194,65 @@ export class InspectionsService {
     });
   }
 
+  /**
+   * Cross-site completed-inspections list for the admin portal's global
+   * "Completed Inspections" nav tab - same clientCode/siteId filter and
+   * pagination convention as InventoryService.findAllGlobal/
+   * AdminFeedbackService.findAll (no page/pageSize -> unpaginated array,
+   * either param -> {data, total, page, pageSize}). Unlike
+   * findCompletedForSite, this has no per-site cap (that "last 10" limit
+   * exists there to keep a single site's own page short, not as a rule
+   * about completed inspections in general).
+   */
+  async findAllCompletedGlobal(clientCode?: string, siteId?: string, page?: number, pageSize?: number) {
+    const where: Prisma.SiteInspectionWhereInput = {
+      status: 'COMPLETED',
+      ...(siteId && { siteId }),
+      ...(clientCode && { site: { clientCode } }),
+    };
+    const include = {
+      _count: { select: { items: true } },
+      completedByUser: { select: { fullName: true, email: true } },
+      createdByUser: { select: { fullName: true, email: true } },
+      site: {
+        select: {
+          id: true,
+          businessName: true,
+          client: { select: { id: true, clientName: true, clientId: true } },
+        },
+      },
+    } as const;
+
+    const mapRow = <T extends { _count: { items: number }; completedByUser: { fullName: string | null; email: string } | null; createdByUser: { fullName: string | null; email: string } | null }>(
+      row: T,
+    ) => {
+      const { _count, completedByUser, createdByUser, ...rest } = row;
+      const inspector = completedByUser ?? createdByUser;
+      return { ...rest, itemCount: _count.items, inspectedBy: inspector ? inspector.fullName || inspector.email : null };
+    };
+
+    if (!page && !pageSize) {
+      const inspections = await this.prisma.siteInspection.findMany({ where, orderBy: { completedAt: 'desc' }, include });
+      return inspections.map(mapRow);
+    }
+
+    const currentPage = page ?? 1;
+    const size = pageSize ?? 50;
+
+    const [inspections, total] = await Promise.all([
+      this.prisma.siteInspection.findMany({
+        where,
+        orderBy: { completedAt: 'desc' },
+        include,
+        skip: (currentPage - 1) * size,
+        take: size,
+      }),
+      this.prisma.siteInspection.count({ where }),
+    ]);
+
+    return { data: inspections.map(mapRow), total, page: currentPage, pageSize: size };
+  }
+
   async findOne(id: string) {
     const inspection = await this.prisma.siteInspection.findUnique({
       where: { id },

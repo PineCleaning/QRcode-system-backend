@@ -8,6 +8,7 @@ import {
   Patch,
   Post,
   Put,
+  Query,
   Res,
   UseGuards,
 } from '@nestjs/common';
@@ -19,6 +20,7 @@ import { Roles } from '../auth/roles.decorator';
 import { RolesGuard } from '../auth/roles.guard';
 import { SupabaseAuthGuard } from '../auth/supabase-auth.guard';
 import { CreateInspectionItemDto } from './dto/create-inspection-item.dto';
+import { FindAllCompletedInspectionsQueryDto } from './dto/find-all-completed-inspections-query.dto';
 import { UpdateInspectionItemDto } from './dto/update-inspection-item.dto';
 import { InspectionReportService } from './inspection-report.service';
 import { InspectionsService } from './inspections.service';
@@ -30,6 +32,12 @@ export class InspectionsController {
     private readonly inspections: InspectionsService,
     private readonly reports: InspectionReportService,
   ) {}
+
+  /** Cross-site list for the admin portal's global "Completed Inspections" nav tab - must stay above sites/:siteId/inspections/completed, no ambiguity there since the path prefix differs, but kept near it for readability. */
+  @Get('admin/inspections/completed')
+  findAllCompletedGlobal(@Query() query: FindAllCompletedInspectionsQueryDto) {
+    return this.inspections.findAllCompletedGlobal(query.clientCode, query.siteId, query.page, query.pageSize);
+  }
 
   @Post('sites/:siteId/inspections')
   openOrResume(
