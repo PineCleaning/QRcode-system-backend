@@ -1,4 +1,4 @@
-import { IsDateString, IsIn, IsInt, IsOptional, IsString, Min, MinLength } from 'class-validator';
+import { IsIn, IsInt, IsOptional, IsString, Min, MinLength } from 'class-validator';
 
 const STATUSES = [
   'IN_STOCK',
@@ -34,10 +34,6 @@ export class CreateInventoryItemDto {
   @IsInt()
   @Min(0)
   quantity!: number;
-
-  @IsDateString()
-  @IsOptional()
-  lastSupplied?: string;
 
   @IsString()
   @IsOptional()

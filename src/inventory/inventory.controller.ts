@@ -15,7 +15,7 @@ import { InventoryService } from './inventory.service';
 export class InventoryController {
   constructor(private readonly inventory: InventoryService) {}
 
-  /** Global cross-site list for the admin portal's "Inventory / Assets" nav tab - same clientCode/siteId filter convention as AdminFeedbackController/AdminMediaController. */
+  /** Global cross-site list for the admin portal's "Assets" nav tab - same clientCode/siteId filter convention as AdminFeedbackController/AdminMediaController. */
   @Get('admin/inventory')
   findAllGlobal(@Query() query: FindAllAdminInventoryQueryDto) {
     return this.inventory.findAllGlobal(query.clientCode, query.siteId, query.page, query.pageSize);
