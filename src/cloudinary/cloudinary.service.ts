@@ -123,6 +123,23 @@ export class CloudinaryService {
     });
   }
 
+  /**
+   * A small, fixed-format (jpg) thumbnail URL for embedding into a
+   * server-generated PDF - buildDeliveryUrl's `fetch_format: 'auto'`
+   * can hand back WebP/AVIF depending on request headers, which
+   * pdfkit's .image() can't decode. Forcing `format: 'jpg'` here keeps
+   * the report generator's image fetch independent of the caller's
+   * Accept header.
+   */
+  buildReportThumbnailUrl(publicId: string): string {
+    return cloudinary.url(publicId, {
+      resource_type: 'image',
+      secure: true,
+      format: 'jpg',
+      transformation: [{ width: 300, height: 300, crop: 'limit' }],
+    });
+  }
+
   /** Returns null if the resource doesn't exist (e.g. a spoofed/fabricated public_id) rather than throwing. */
   async verifyResource(publicId: string, resourceType: 'image' | 'video'): Promise<CloudinaryResourceInfo | null> {
     try {

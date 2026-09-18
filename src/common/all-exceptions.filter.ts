@@ -25,6 +25,26 @@ export class AllExceptionsFilter implements ExceptionFilter {
       return;
     }
 
+    // body-parser throws this (not an HttpException) when a raw request
+    // body exceeds Express's default JSON limit (100kb) - without this
+    // check it fell through to the generic 500 below. DTO-level
+    // @MaxLength caps (e.g. inspection notes) keep any legitimate
+    // request well under this in practice; this is just a clean error
+    // for whatever bypasses that (a direct API call, a future field
+    // without its own cap), instead of an opaque crash.
+    if (
+      exception &&
+      typeof exception === 'object' &&
+      'type' in exception &&
+      (exception as { type?: string }).type === 'entity.too.large'
+    ) {
+      response.status(HttpStatus.PAYLOAD_TOO_LARGE).json({
+        statusCode: HttpStatus.PAYLOAD_TOO_LARGE,
+        message: 'Request is too large. Please shorten your input and try again.',
+      });
+      return;
+    }
+
     this.logger.error(
       `Unhandled exception on ${request.method} ${request.url}: ${exception instanceof Error ? exception.stack : String(exception)}`,
     );
