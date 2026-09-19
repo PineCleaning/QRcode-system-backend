@@ -29,11 +29,10 @@ export class AdminFeedbackService {
    * present -> paginated { data, total, page, pageSize } shape instead,
    * matching ClientsService.findAll's pattern.
    */
-  async findAll(clientCode?: string, siteId?: string, page?: number, pageSize?: number, flagged?: boolean) {
+  async findAll(clientCode?: string, siteId?: string, page?: number, pageSize?: number) {
     const where = {
       ...(siteId && { siteId }),
       ...(clientCode && { site: { clientCode } }),
-      ...(flagged !== undefined && { flagged }),
     };
 
     const withMediaUrls = <T extends { media: { status: string; cloudinaryPublicId: string; resourceType: string }[] }>(submission: T) => ({
@@ -91,19 +90,6 @@ export class AdminFeedbackService {
   /** Manually re-triggers delivery for a permanently FAILED submission (resets the retry cycle back to attempt 1). */
   async retry(feedbackId: string): Promise<void> {
     await this.integrationJobs.resetForRetry(feedbackId);
-  }
-
-  /**
-   * Toggles the flagged marker - open to both roles (not a delete), and
-   * independent of the feedback's delivery status. Throws 404 for a
-   * nonexistent id, same as every other single-row mutation in this app.
-   */
-  async setFlagged(id: string, flagged: boolean) {
-    const feedback = await this.prisma.feedbackSubmission.findUnique({ where: { id } });
-    if (!feedback) {
-      throw new NotFoundException(`Feedback ${id} not found`);
-    }
-    return this.prisma.feedbackSubmission.update({ where: { id }, data: { flagged } });
   }
 
   /**

@@ -46,8 +46,7 @@ const ATTENTION_RATINGS = new Set(['BELOW_AVERAGE', 'VERY_POOR']);
  * Renders a completed inspection session as a PDF - a summary bar
  * (inspector/completed/duration + an overall-score pie chart) followed
  * by one row per inspected space (progress bar, rating, notes, photo
- * thumbnails), with rows that need attention tinted pink and flagged
- * items badged. Styled after a reference inspection-app screenshot the
+ * thumbnails), with rows that need attention tinted pink. Styled after a reference inspection-app screenshot the
  * client shared (2026-09-15) - adapted to this app's actual data shape,
  * which has one rating per space rather than the reference's nested
  * room-then-checklist-items structure, so each space maps to one row
@@ -235,11 +234,6 @@ export class InspectionReportService {
     doc.y = boxTop + boxHeight;
     doc.moveDown(0.5);
 
-    const flaggedCount = inspection.items.filter((i) => i.flagged).length;
-    if (flaggedCount > 0) {
-      doc.fillColor(CORAL).fontSize(10).font('Helvetica-Bold').text(`${flaggedCount} item${flaggedCount === 1 ? '' : 's'} flagged for follow-up`, PAGE_LEFT, doc.y);
-      doc.moveDown(0.3);
-    }
     doc.moveDown(0.4);
   }
 
@@ -300,10 +294,7 @@ export class InspectionReportService {
       .fontSize(12.5)
       .font('Helvetica-Bold')
       .fillColor(needsAttention ? CORAL : INK)
-      .text(item.spaceName, PAGE_LEFT, rowTop, { continued: item.flagged, lineBreak: false });
-    if (item.flagged) {
-      doc.fontSize(8.5).font('Helvetica-Bold').fillColor(CORAL).text('  FLAGGED', { lineBreak: false });
-    }
+      .text(item.spaceName, PAGE_LEFT, rowTop, { lineBreak: false });
 
     const bodyY = rowTop + nameHeight + padding;
 
@@ -398,6 +389,5 @@ interface ReportItem {
   rating: string | null;
   percentage: number | null;
   notes: string | null;
-  flagged: boolean;
   media: { id: string; resourceType: string }[];
 }

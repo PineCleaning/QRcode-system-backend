@@ -5,7 +5,6 @@ import {
   Get,
   HttpCode,
   Param,
-  Patch,
   Post,
   Put,
   Query,
@@ -15,7 +14,6 @@ import {
 import type { Response } from 'express';
 import type { AdminUser } from '../../generated/prisma/client';
 import { CurrentAdmin } from '../auth/current-admin.decorator';
-import { FlagDto } from '../common/dto/flag.dto';
 import { Roles } from '../auth/roles.decorator';
 import { RolesGuard } from '../auth/roles.guard';
 import { SupabaseAuthGuard } from '../auth/supabase-auth.guard';
@@ -93,18 +91,6 @@ export class InspectionsController {
     @Body() dto: UpdateInspectionItemDto,
   ) {
     return this.inspections.updateItem(itemId, dto);
-  }
-
-  /** Every flagged item across every site/client, for the Flagged tab. Must stay above :itemId routes - it's a literal path segment, not a param, but keeping the specific route first avoids any ambiguity. */
-  @Get('inspections/items/flagged')
-  findFlaggedItems() {
-    return this.inspections.findFlaggedItems();
-  }
-
-  /** Open to both roles, same as add/edit item - toggles independent of the session's OPEN/COMPLETED status. */
-  @Patch('inspections/items/:itemId/flag')
-  setItemFlagged(@Param('itemId') itemId: string, @Body() dto: FlagDto) {
-    return this.inspections.setItemFlagged(itemId, dto.flagged);
   }
 
   /** Admin-only, same as the Media page and Inventory delete - matches the app's existing "delete = Admin only" convention. */
